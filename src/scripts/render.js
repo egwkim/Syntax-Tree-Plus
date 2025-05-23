@@ -7,8 +7,11 @@
 function renderTreeToSVG(tree, onNodeClick) {
   const svgNS = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(svgNS, "svg");
-  svg.setAttribute("width", "800");
-  svg.setAttribute("height", "600");
+  svg.setAttribute("width", "100%");
+  svg.setAttribute("height", "100%");
+  svg.style.width = "100vw";
+  svg.style.height = "100vh";
+  svg.style.display = "block";
 
   // Create groups for layering
   const linesGroup = document.createElementNS(svgNS, "g");
@@ -18,10 +21,21 @@ function renderTreeToSVG(tree, onNodeClick) {
   svg.appendChild(circlesGroup);
   svg.appendChild(textGroup);
 
+  // Helper to calculate the width of each subtree
+  function calcSubtreeWidth(node, nodeRadius, minSpacing) {
+    if (!node.children || node.children.length === 0) return nodeRadius * 2;
+    let total = 0;
+    node.children.forEach(child => {
+      total += calcSubtreeWidth(child, nodeRadius, minSpacing);
+    });
+    total += minSpacing * (node.children.length - 1);
+    return Math.max(total, nodeRadius * 2);
+  }
+
   function drawNode(node, x, y, level, parentCoords = null) {
     const nodeRadius = 20;
     const verticalSpacing = 80;
-    const horizontalSpacing = 120;
+    const minSpacing = 40; // minimum horizontal spacing between nodes
 
     // Draw line to parent if not root
     if (parentCoords) {
@@ -64,17 +78,28 @@ function renderTreeToSVG(tree, onNodeClick) {
     });
     textGroup.appendChild(text);
 
-    // Draw children
+    // Draw children with automatic spacing
     const children = node.getChildren();
-    const totalWidth = (children.length - 1) * horizontalSpacing;
-    children.forEach((child, i) => {
-      const childX = x - totalWidth / 2 + i * horizontalSpacing;
-      const childY = y + verticalSpacing;
-      drawNode(child, childX, childY, level + 1, { x, y });
-    });
+    if (children.length > 0) {
+      // Calculate total width needed for all children
+      const subtreeWidths = children.map(child => calcSubtreeWidth(child, nodeRadius, minSpacing));
+      const totalWidth = subtreeWidths.reduce((a, b) => a + b, 0) + minSpacing * (children.length - 1);
+      let startX = x - totalWidth / 2 + subtreeWidths[0] / 2;
+      for (let i = 0; i < children.length; i++) {
+        drawNode(children[i], startX, y + verticalSpacing, level + 1, { x, y });
+        if (i < children.length - 1) {
+          startX += (subtreeWidths[i] + subtreeWidths[i + 1]) / 2 + minSpacing;
+        }
+      }
+    }
   }
 
-  drawNode(tree.root, 400, 50, 0);
+  // Calculate the width and height of the viewport
+  const nodeRadius = 20;
+  const minSpacing = 40;
+  const viewportWidth = window.innerWidth;
+  const centerX = viewportWidth / 2;
+  drawNode(tree.root, centerX, 100, 0);
 
   return svg;
 }

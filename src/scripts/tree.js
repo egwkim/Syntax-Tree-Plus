@@ -14,8 +14,12 @@ class Node {
     }
   }
 
-  addChild(child) {
-    this.children.push(child);
+  addChild(child, idx = -1) {
+    if (idx === -1) {
+      this.children.push(child);
+    } else {
+      this.children.splice(idx, 0, child);
+    }
     child.parent = this;
   }
 
