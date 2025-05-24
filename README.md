@@ -3,25 +3,12 @@
 [Live Demo on GitHub Pages](https://egwkim.github.io/Syntax-Tree-Plus/)
 
 ## Overview
+
 Syntax Tree Plus is a web-based application for creating, editing, and visualizing syntactic tree structures. It features intuitive keyboard navigation, node editing, and clipboard operations (cut/copy/paste), all rendered interactively with SVG.
 
-## Project Structure
-```
-syntaxtreeplus
-├── src
-│   ├── index.html          # Main HTML document
-│   ├── css
-│   │   └── styles.css      # Styles for the tree visualizer
-│   ├── scripts
-│   │   ├── main.js         # Entry point and UI logic
-│   │   ├── tree.js         # Tree and Node class definitions
-│   │   ├── render.js       # SVG rendering logic
-│   │   ├── edit.js         # Editing and clipboard functions
-├── README.md               # Project documentation
-```
-
 ## Features
-- **SVG Tree Visualization**: Interactive, auto-spaced tree rendering with node selection highlighting.
+
+- **SVG Tree Visualization**: Tree rendering with node selection highlighting.
 - **Keyboard Navigation**: Use arrow keys to move between parent, child, and sibling nodes.
 - **Editing**:
   - Press 'n' to add a child node.
@@ -35,17 +22,36 @@ syntaxtreeplus
 - **Mouse Support**: Click nodes to select.
 
 ## Usage
-1. Clone the repository.
-2. Open `src/index.html` in your browser.
-3. Use keyboard shortcuts or mouse to interact with the tree.
+
+### 1. Install dependencies
+
+If you haven't already, install [pnpm](https://pnpm.io/) \
+Install dependencies
+
+```sh
+pnpm install
+```
+
+### 2. Build the project
+
+```sh
+pnpm run build
+# or
+make build
+```
+
+### 3. Start a local dev server
+
+```sh
+pnpm run start
+# or
+make start
+```
+
+Then open [http://localhost:3000](http://localhost:3000) (or the port shown in your terminal) in your browser.
+
+### 5. Use keyboard shortcuts or mouse to interact with the tree.
 
 ## Implementation Notes
-- The tree is rendered using SVG, with automatic spacing to prevent node overlap.
-- All editing and navigation logic is in `main.js` and `edit.js`.
-- The root node is always centered on the screen.
 
-## Contributing
-Contributions are welcome! Please open an issue or submit a pull request.
-
-## License
-MIT License
+- The tree is rendered using SVG

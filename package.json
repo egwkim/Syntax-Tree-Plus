@@ -1,0 +1,19 @@
+{
+  "name": "syntaxtreeplus",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "build": "make build",
+    "start": "make start"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.10.0",
+  "devDependencies": {
+    "@types/node": "^22.15.21",
+    "serve": "^14.2.4",
+    "typescript": "^5.8.3"
+  }
+}
