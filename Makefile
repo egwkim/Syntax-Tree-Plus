@@ -8,7 +8,7 @@ build: clean tsc copy
 # Removing the actual dist directory confuses git and will require a git worktree prune to fix
 .PHONY: clean
 clean:
-	if [ -d "$(DIST_DIR)" ]; then rm -rf $(DIST_DIR); fi
+	if [ -d "$(DIST_DIR)" ]; then rm -rf $(DIST_DIR)/*; fi
 
 
 .PHONY: serve
@@ -41,7 +41,7 @@ dist:
 	if [ -d "dist" ]; then \
 		rm -r dist;\
 	fi; \
-	git worktree add -f dist gh-pages && \
+	git worktree add -f --relative-paths dist gh-pages && \
 	if [ ! "$${stashed%%Saved*}" ]; then \
 		git stash pop; \
 	fi
