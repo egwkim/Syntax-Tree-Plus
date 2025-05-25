@@ -1,4 +1,5 @@
-import { Tree, Node } from './tree.js';
+import { Tree, Node } from "./tree.js";
+import { settings } from "./settings.js";
 
 /**
  * Renders a tree as an SVG element.
@@ -6,7 +7,10 @@ import { Tree, Node } from './tree.js';
  * @param onNodeClick - Callback function to handle node click events.
  * @returns The SVG element representing the tree.
  */
-export function renderTreeToSVG(tree: Tree, onNodeClick: (node: Node, x: number, y: number) => void): SVGSVGElement {
+function renderTreeToSVG(
+  tree: Tree,
+  onNodeClick: (node: Node, x: number, y: number) => void
+): SVGSVGElement {
   const svgNS = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(svgNS, "svg");
   svg.setAttribute("width", "100%");
@@ -15,90 +19,117 @@ export function renderTreeToSVG(tree: Tree, onNodeClick: (node: Node, x: number,
   svg.style.height = "100vh";
   svg.style.display = "block";
 
+  const nodeHeight = settings.node.height;
+  const nodeRadius = settings.node.radius;
+  const horizontalSpacing = settings.node.horizontalSpacing;
+  const verticalSpacing = settings.node.verticalSpacing;
+
+  tree.calculateWidths();
+
   // Create groups for layering
   const linesGroup = document.createElementNS(svgNS, "g");
-  const circlesGroup = document.createElementNS(svgNS, "g");
-  const textGroup = document.createElementNS(svgNS, "g");
-  svg.appendChild(linesGroup);
-  svg.appendChild(circlesGroup);
+  const rectanglesGroup = document.createElementNS(svgNS, "g");
+  const textGroup = document.createElementNS(svgNS, "g");  svg.appendChild(linesGroup);
+  svg.appendChild(rectanglesGroup);
   svg.appendChild(textGroup);
 
-  function calcSubtreeWidth(node: Node, nodeRadius: number, minSpacing: number): number {
-    if (!node.children || node.children.length === 0) return nodeRadius * 2;
-    let total = 0;
-    node.children.forEach((child: Node) => {
-      total += calcSubtreeWidth(child, nodeRadius, minSpacing);
-    });
-    total += minSpacing * (node.children.length - 1);
-    return Math.max(total, nodeRadius * 2);
-  }
+  // Center the root node in the viewport
+  const defaultOffsetX = window.innerWidth / 2;
+  const defaultOffsetY = 50;
+  function renderSubtree(node: Node, x: number, y: number) {
+    // Render children first
+    if (node.children.length > 0) {
+      // Calculate total width needed for all children (using their width property for spacing)
+      let totalChildrenWidth = 0;
+      node.children.forEach((child: Node, index: number) => {
+        totalChildrenWidth += child.width;
+        if (index < node.children.length - 1) {
+          totalChildrenWidth += horizontalSpacing;
+        }
+      });
 
-  function drawNode(node: Node, x: number, y: number, level: number, parentCoords: {x: number, y: number} | null = null) {
-    const nodeRadius = 20;
-    const verticalSpacing = 80;
-    const minSpacing = 40;
+      // Position children centered under the parent
+      let childX = x - totalChildrenWidth / 2;
+      const childY = y + verticalSpacing;
 
-    // Draw line to parent if not root
-    if (parentCoords) {
-      const line = document.createElementNS(svgNS, "line");
-      line.setAttribute("x1", parentCoords.x.toString());
-      line.setAttribute("y1", parentCoords.y.toString());
-      line.setAttribute("x2", x.toString());
-      line.setAttribute("y2", y.toString());
-      line.setAttribute("stroke", "#888");
-      line.setAttribute("stroke-width", "2");
-      linesGroup.appendChild(line);
+      // Recursively render each child and draw connecting lines
+      node.children.forEach((child: Node) => {
+        // Position child at center of its allocated width
+        const childCenterX = childX + child.width / 2;
+        
+        // Recursively render the child subtree
+        renderSubtree(child, childCenterX, childY);
+        
+        // Draw line from parent to child
+        const line = document.createElementNS(svgNS, "line");
+        line.setAttribute("x1", x.toString());
+        line.setAttribute("y1", (y + nodeHeight / 2).toString());
+        line.setAttribute("x2", childCenterX.toString());
+        line.setAttribute("y2", (childY - nodeHeight / 2).toString());
+        line.setAttribute("stroke", settings.edge.color);
+        line.setAttribute("stroke-width", settings.edge.width.toString());
+        linesGroup.appendChild(line);
+        
+        // Move to next child position (using child.width for spacing)
+        childX += child.width + horizontalSpacing;
+      });
     }
 
-    // Draw node circle
-    const circle = document.createElementNS(svgNS, "circle");
-    circle.setAttribute("cx", x.toString());
-    circle.setAttribute("cy", y.toString());
-    circle.setAttribute("r", nodeRadius.toString());
-    circle.setAttribute("fill", tree.selectedNode === node ? "#cce6ff" : "#fff");
-    circle.setAttribute("stroke", "#333");
-    circle.setAttribute("stroke-width", "2");
-    circle.style.cursor = "pointer";
-    circle.addEventListener("click", function(e) {
-      e.stopPropagation();
-      if (onNodeClick) onNodeClick(node, x, y);
-    });
-    circlesGroup.appendChild(circle);
+    // Draw the current node after its children
+    drawNode(node, x, y);
+  }
+  // Helper function to draw a single node
+  function drawNode(node: Node, x: number, y: number) {
+    // Use textWidth for rectangle size, with padding from settings
+    const nodeWidth = Math.max(node.textWidth + settings.node.padding * 2, settings.node.minWidth);
 
-    // Draw label
+    // Draw rectangle
+    const rect = document.createElementNS(svgNS, "rect");
+    rect.setAttribute("x", (x - nodeWidth / 2).toString());
+    rect.setAttribute("y", (y - nodeHeight / 2).toString());
+    rect.setAttribute("width", nodeWidth.toString());
+    rect.setAttribute("height", nodeHeight.toString());
+    rect.setAttribute("rx", nodeRadius.toString());
+    rect.setAttribute("ry", nodeRadius.toString());
+    rect.setAttribute("fill", tree.selectedNode === node ? "#cce6ff" : "#fff");
+    rect.setAttribute("stroke", "#ddd");
+    rect.setAttribute("stroke-width", "1");
+    rect.style.cursor = "pointer";
+    rect.addEventListener("click", (e) => {
+      e.stopPropagation();
+      onNodeClick(node, x, y);
+    });
+    rectanglesGroup.appendChild(rect);
+
+    // Draw text label
     const text = document.createElementNS(svgNS, "text");
     text.setAttribute("x", x.toString());
     text.setAttribute("y", (y + 5).toString());
     text.setAttribute("text-anchor", "middle");
-    text.setAttribute("font-size", "14");
+    text.setAttribute("font-size", settings.label.fontSize.toString());
+    text.setAttribute("font-family", settings.label.fontFamily);
+    text.setAttribute("fill", settings.label.color);
     text.textContent = node.label;
     text.style.cursor = "pointer";
-    text.addEventListener("click", function(e) {
+    text.addEventListener("click", (e) => {
       e.stopPropagation();
-      if (onNodeClick) onNodeClick(node, x, y);
+      onNodeClick(node, x, y);
     });
     textGroup.appendChild(text);
-
-    // Draw children with automatic spacing
-    const children = node.getChildren();
-    if (children.length > 0) {
-      const subtreeWidths = children.map((child: Node) => calcSubtreeWidth(child, nodeRadius, minSpacing));
-      const totalWidth = subtreeWidths.reduce((a: number, b: number) => a + b, 0) + minSpacing * (children.length - 1);
-      let startX = x - totalWidth / 2 + subtreeWidths[0] / 2;
-      for (let i = 0; i < children.length; i++) {
-        drawNode(children[i], startX, y + verticalSpacing, level + 1, { x, y });
-        if (i < children.length - 1) {
-          startX += (subtreeWidths[i] + subtreeWidths[i + 1]) / 2 + minSpacing;
-        }
-      }
-    }
   }
 
-  const nodeRadius = 20;
-  const minSpacing = 40;
-  const viewportWidth = window.innerWidth;
-  const centerX = viewportWidth / 2;
-  drawNode(tree.root, centerX, 100, 0);
+  // Start rendering from the root
+  renderSubtree(tree.root, defaultOffsetX, defaultOffsetY);
 
   return svg;
+}
+
+export function render(tree: Tree) {
+  const container = document.getElementById("tree-container")!;
+  container.innerHTML = "";
+  const svg = renderTreeToSVG(tree, (node: Node, x: number, y: number) => {
+    tree.selectedNode = node;
+    render(tree);
+  });
+  container.appendChild(svg);
 }

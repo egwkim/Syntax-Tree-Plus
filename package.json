@@ -5,7 +5,9 @@
   "main": "index.js",
   "scripts": {
     "build": "make build",
-    "start": "make start"
+    "start": "make serve",
+    "serve": "make serve",
+    "watch": "nodemon -L --watch src --ext ts,js,html,css --exec \"make build && make serve\""
   },
   "keywords": [],
   "author": "",
@@ -13,6 +15,7 @@
   "packageManager": "pnpm@10.10.0",
   "devDependencies": {
     "@types/node": "^22.15.21",
+    "nodemon": "^3.1.10",
     "serve": "^14.2.4",
     "typescript": "^5.8.3"
   }

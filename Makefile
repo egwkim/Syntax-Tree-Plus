@@ -11,8 +11,8 @@ clean:
 	if [ -d "$(DIST_DIR)" ]; then rm -rf $(DIST_DIR); fi
 
 
-.PHONY: start
-start:
+.PHONY: serve
+serve:
 	pnpm exec serve dist
 
 # Copy files from src to dist excluding *.ts
