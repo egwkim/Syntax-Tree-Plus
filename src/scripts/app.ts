@@ -4,8 +4,29 @@ import { settings } from "./settings.js";
 import { parse, parseLabel } from "./parser.js";
 import { serialize } from "./serialize.js";
 import { History } from "./history.js";
-import { saveDoc, loadDoc, saveTheme, loadTheme } from "./persist.js";
-import { exportSVG, exportPNG, exportLaTeX } from "./export.js";
+import {
+  saveDoc,
+  loadDoc,
+  saveTheme,
+  loadTheme,
+  savePrefs,
+  loadPrefs,
+} from "./persist.js";
+import {
+  exportSVG,
+  exportPNG,
+  exportLaTeX,
+  copyImagePNG,
+  copySVGMarkup,
+} from "./export.js";
+import {
+  matchBrackets,
+  bracketPairAtCaret,
+  matchingOpen,
+  buildHighlightHTML,
+  diffRange,
+  adjustIndex,
+} from "./brackets.js";
 import {
   cloneNodeSubtree,
   addChildAt,
@@ -15,9 +36,12 @@ import {
   wrapNode,
   moveSibling,
   xbarTemplate,
+  cpTpTemplate,
+  coordinationTemplate,
   toggleTriangle,
   isDescendant,
   reparent,
+  linkNodes,
 } from "./edit.js";
 
 const DEFAULT_DOC =
@@ -26,9 +50,18 @@ const DEFAULT_DOC =
 export function startApp() {
   const container = document.getElementById("tree-container") as HTMLElement;
   const textInput = document.getElementById("text-input") as HTMLTextAreaElement;
+  const textHighlights = document.getElementById("text-highlights") as HTMLElement;
   const parseError = document.getElementById("parse-error") as HTMLElement;
   const toolbar = document.getElementById("toolbar") as HTMLElement;
   const helpModal = document.getElementById("help-modal") as HTMLElement;
+  const settingsModal = document.getElementById("settings-modal") as HTMLElement;
+  const fontSizeInput = document.getElementById("setting-font-size") as HTMLInputElement;
+  const hSpacingInput = document.getElementById("setting-h-spacing") as HTMLInputElement;
+  const vSpacingInput = document.getElementById("setting-v-spacing") as HTMLInputElement;
+  const edgeStyleSelect = document.getElementById("setting-edge-style") as HTMLSelectElement;
+  const autoSubscriptInput = document.getElementById("setting-auto-subscript") as HTMLInputElement;
+  const nodeColorInput = document.getElementById("setting-node-color") as HTMLInputElement;
+  const colorHint = document.getElementById("settings-color-hint") as HTMLElement;
 
   let tree!: Tree;
   const historyStack = new History();
@@ -36,6 +69,8 @@ export function startApp() {
   let clipboard: Node | null = null;
   let inlineEditor: HTMLInputElement | null = null;
   let dragMode = false;
+  let linkMode = false;
+  let linkSource: Node | null = null;
 
   // ---- helpers -------------------------------------------------------
 
@@ -75,14 +110,69 @@ export function startApp() {
     }
   }
 
+  /** Is DOM focus currently on a node inside the tree SVG? */
+  function treeHasFocus(): boolean {
+    const active = document.activeElement;
+    return (
+      active instanceof Element &&
+      container.contains(active) &&
+      active.closest("[data-node-id]") !== null
+    );
+  }
+
+  /** Move DOM focus to the selected node's group (roving-tabindex target). */
+  function focusSelectedNode() {
+    const target = tree.selectedNode ?? tree.root;
+    container
+      .querySelector<SVGGElement>(`[data-node-id="${target.id}"]`)
+      ?.focus();
+  }
+
   function renderTree() {
+    // The SVG is rebuilt from scratch, which drops focus; if the user was
+    // navigating with the keyboard, put focus back on the selected node.
+    const refocus = treeHasFocus();
     render(tree, container, (node) => {
+      if (linkMode) {
+        handleLinkClick(node);
+        return;
+      }
       tree.selectedNode = node;
       navigationHistory.length = 0;
       renderTree();
     });
     updateHistoryButtons();
     updateRoundTripWarning();
+    if (settingsModal.classList.contains("active")) syncSettingsInputs();
+    if (refocus) focusSelectedNode();
+  }
+
+  /**
+   * Two-click picker for the explicit "Arrow" tool: the first click marks a
+   * source node (shown via normal selection styling + a status hint); the
+   * second click links it to the target with a shared subscript (`linkNodes`
+   * in edit.ts) — the movement arrow itself is still derived from that
+   * co-indexation, same as manually typing matching subscripts.
+   */
+  function handleLinkClick(node: Node) {
+    if (!linkSource) {
+      linkSource = node;
+      tree.selectedNode = node;
+      renderTree();
+      flashStatus(`Arrow from "${node.label || "∅"}" — click the target node`);
+      return;
+    }
+    if (node === linkSource) {
+      linkSource = null;
+      renderTree();
+      flashStatus("Cancelled");
+      return;
+    }
+    linkNodes(tree, linkSource, node);
+    tree.selectedNode = node;
+    linkSource = null;
+    mutated();
+    flashStatus("Linked with a movement arrow");
   }
 
   /**
@@ -107,7 +197,10 @@ export function startApp() {
     const text = serialize(tree);
     historyStack.push(text);
     saveDoc(text);
-    if (updateText) textInput.value = text;
+    if (updateText) {
+      textInput.value = text;
+      afterProgrammaticValue();
+    }
     renderTree();
   }
 
@@ -137,7 +230,82 @@ export function startApp() {
       renderTree();
     }, 250);
   }
+
+  // ---- syntax-highlight overlay + bracket handling -------------------
+  //
+  // The textarea's glyphs are transparent (see CSS); `textHighlights` is a
+  // mirror <div> layered exactly behind it that re-renders the same text with
+  // the matching bracket pair at the caret highlighted (VS Code style).
+  //
+  // `autoCloses` holds the indices of `]` characters we auto-inserted. Only
+  // those may be typed over — a `]` the user typed themselves is always
+  // inserted literally. Positions are kept in sync with edits (`reconcile`)
+  // and dropped once the caret leaves their pair (`pruneAutoCloses`).
+  let autoCloses: number[] = [];
+  let lastValue = "";
+
+  function syncScroll() {
+    textHighlights.scrollTop = textInput.scrollTop;
+    textHighlights.scrollLeft = textInput.scrollLeft;
+  }
+
+  function refreshHighlight() {
+    const val = textInput.value;
+    // Only box a pair while the pane is focused with a collapsed caret — like an
+    // editor, an unfocused pane shows plain text with no match highlight.
+    const active =
+      document.activeElement === textInput &&
+      textInput.selectionStart === textInput.selectionEnd;
+    const pair = active
+      ? bracketPairAtCaret(val, textInput.selectionStart, matchBrackets(val))
+      : null;
+    textHighlights.innerHTML = buildHighlightHTML(val, pair);
+    syncScroll();
+  }
+
+  /** Keep tracked `]` positions valid across a content change. */
+  function reconcile() {
+    const val = textInput.value;
+    const d = diffRange(lastValue, val);
+    autoCloses = autoCloses
+      .map((p) => adjustIndex(p, d))
+      .filter((p) => p >= 0 && val[p] === "]");
+    lastValue = val;
+  }
+
+  /** Forget any tracked pair the caret is no longer inside. */
+  function pruneAutoCloses() {
+    if (autoCloses.length === 0) return;
+    const val = textInput.value;
+    const caret = textInput.selectionStart;
+    const matchOf = matchBrackets(val);
+    autoCloses = autoCloses.filter((c) => {
+      if (val[c] !== "]") return false;
+      const open = matchingOpen(matchOf, c);
+      return open >= 0 && open < caret && caret <= c;
+    });
+  }
+
+  /** Re-sync overlay state after code replaces the textarea value directly. */
+  function afterProgrammaticValue() {
+    lastValue = textInput.value;
+    autoCloses = []; // a wholesale replacement — no pair is mid-edit
+    refreshHighlight();
+  }
+
+  textInput.addEventListener("input", () => {
+    reconcile();
+    refreshHighlight();
+  });
   textInput.addEventListener("input", onTextChanged);
+  textInput.addEventListener("scroll", syncScroll);
+  textInput.addEventListener("focus", refreshHighlight);
+  textInput.addEventListener("blur", refreshHighlight);
+  document.addEventListener("selectionchange", () => {
+    if (document.activeElement !== textInput) return;
+    pruneAutoCloses();
+    refreshHighlight();
+  });
 
   // ---- IDE-style bracket handling in the text pane -------------------
   textInput.addEventListener("keydown", (e) => {
@@ -154,7 +322,7 @@ export function startApp() {
       el.value = text;
       el.selectionStart = selStart;
       el.selectionEnd = selEnd;
-      el.dispatchEvent(new Event("input")); // re-parse + re-render
+      el.dispatchEvent(new Event("input")); // reconcile + re-highlight + re-parse
     };
 
     if (e.key === "[") {
@@ -163,13 +331,20 @@ export function startApp() {
       e.preventDefault();
       const selected = val.slice(start, end);
       const text = val.slice(0, start) + "[" + selected + "]" + val.slice(end);
+      // The auto-inserted `]` lands right after the (possibly empty) selection;
+      // remember it so a following `]` types over it instead of duplicating.
+      const closePos = start + 1 + selected.length;
       if (start === end) applyEdit(text, start + 1);
       else applyEdit(text, start + 1, end + 1);
+      autoCloses.push(closePos);
     } else if (e.key === "]") {
-      // Type over an existing closing bracket instead of duplicating it.
-      if (start === end && val[start] === "]") {
+      // Type over the closing bracket only when it's one we auto-inserted;
+      // a `]` the user typed themselves is inserted literally by the browser.
+      if (start === end && val[start] === "]" && autoCloses.includes(start)) {
         e.preventDefault();
         el.selectionStart = el.selectionEnd = start + 1;
+        autoCloses = autoCloses.filter((p) => p !== start); // consumed
+        refreshHighlight();
       }
     } else if (e.key === "Backspace" && start === end) {
       // Delete an empty [] pair in one keystroke.
@@ -293,11 +468,19 @@ export function startApp() {
       return;
     }
     const onNode = (e.target as Element).closest("[data-node-id]");
-    if (!onNode && tree.selectedNode) {
+    if (onNode) return;
+    let changed = false;
+    if (linkSource) {
+      linkSource = null;
+      flashStatus("Cancelled");
+      changed = true;
+    }
+    if (tree.selectedNode) {
       tree.selectedNode = null;
       navigationHistory.length = 0;
-      renderTree();
+      changed = true;
     }
+    if (changed) renderTree();
   });
 
   // ---- toolbar actions -----------------------------------------------
@@ -377,6 +560,16 @@ export function startApp() {
         .querySelector('[data-action="toggle-drag"]')
         ?.classList.toggle("active", dragMode);
       if (!dragMode) cleanupDrag(false);
+      if (dragMode && linkMode) actions["toggle-link"]();
+    },
+    "toggle-link"() {
+      linkMode = !linkMode;
+      linkSource = null;
+      document.body.classList.toggle("link-mode", linkMode);
+      toolbar
+        .querySelector('[data-action="toggle-link"]')
+        ?.classList.toggle("active", linkMode);
+      if (linkMode && dragMode) actions["toggle-drag"]();
     },
     wrap() {
       const sel = tree.selectedNode;
@@ -410,6 +603,20 @@ export function startApp() {
       tree.selectedNode = head;
       mutated();
     },
+    cptp() {
+      const sel = tree.selectedNode;
+      if (!sel) return;
+      const head = cpTpTemplate(tree, sel);
+      tree.selectedNode = head;
+      mutated();
+    },
+    coordination() {
+      const sel = tree.selectedNode;
+      if (!sel) return;
+      const target = coordinationTemplate(tree, sel);
+      tree.selectedNode = target;
+      mutated();
+    },
     undo() {
       const state = historyStack.undo();
       if (state !== null) restoreFromHistory(state);
@@ -421,12 +628,24 @@ export function startApp() {
     "export-svg": () => exportSVG(tree),
     "export-png": () => exportPNG(tree),
     "export-latex": () => exportLaTeX(tree),
+    "copy-png-image": () => {
+      copyImagePNG(tree)
+        .then(() => flashStatus("Copied image"))
+        .catch((err: Error) => alert(err.message || "Couldn't copy the image."));
+    },
+    "copy-svg-markup": () => {
+      copySVGMarkup(tree)
+        .then(() => flashStatus("Copied SVG"))
+        .catch((err: Error) => alert(err.message || "Couldn't copy the SVG."));
+    },
     "toggle-align"() {
       settings.leafAlignment = settings.leafAlignment === "leaf" ? "node" : "leaf";
+      savePrefs();
       renderTree();
     },
     "toggle-boxes"() {
       settings.showNodeBoxes = !settings.showNodeBoxes;
+      savePrefs();
       renderTree();
     },
     "toggle-theme": () => toggleTheme(),
@@ -436,7 +655,79 @@ export function startApp() {
     "close-help"() {
       helpModal.classList.remove("active");
     },
+    settings() {
+      syncSettingsInputs();
+      settingsModal.classList.add("active");
+    },
+    "close-settings"() {
+      settingsModal.classList.remove("active");
+    },
+    "reset-node-color"() {
+      if (!tree.selectedNode) return;
+      delete tree.selectedNode.color;
+      renderTree();
+    },
   };
+
+  /** Reflect current settings + the selected node's color into the panel's inputs. */
+  function syncSettingsInputs() {
+    fontSizeInput.value = String(settings.label.fontSize);
+    hSpacingInput.value = String(settings.node.horizontalSpacing);
+    vSpacingInput.value = String(settings.node.verticalSpacing);
+    edgeStyleSelect.value = settings.edge.style;
+    autoSubscriptInput.checked = settings.autoSubscript;
+
+    const sel = tree?.selectedNode;
+    nodeColorInput.disabled = !sel;
+    if (sel) {
+      nodeColorInput.value = sel.color || settings.label.color;
+      colorHint.textContent = `Color for "${sel.label || "∅"}". Cleared by Reset or a text-pane edit.`;
+    } else {
+      nodeColorInput.value = "#000000";
+      colorHint.textContent = "Select a node in the tree to give it a custom color.";
+    }
+  }
+
+  fontSizeInput.addEventListener("input", () => {
+    const v = parseInt(fontSizeInput.value, 10);
+    if (Number.isFinite(v) && v > 0) {
+      settings.label.fontSize = v;
+      savePrefs();
+      renderTree();
+    }
+  });
+  hSpacingInput.addEventListener("input", () => {
+    const v = parseInt(hSpacingInput.value, 10);
+    if (Number.isFinite(v) && v >= 0) {
+      settings.node.horizontalSpacing = v;
+      savePrefs();
+      renderTree();
+    }
+  });
+  vSpacingInput.addEventListener("input", () => {
+    const v = parseInt(vSpacingInput.value, 10);
+    if (Number.isFinite(v) && v >= 0) {
+      settings.node.verticalSpacing = v;
+      savePrefs();
+      renderTree();
+    }
+  });
+  edgeStyleSelect.addEventListener("change", () => {
+    settings.edge.style = edgeStyleSelect.value as "straight" | "curved";
+    savePrefs();
+    renderTree();
+  });
+  autoSubscriptInput.addEventListener("change", () => {
+    settings.autoSubscript = autoSubscriptInput.checked;
+    savePrefs();
+    renderTree();
+  });
+  nodeColorInput.addEventListener("input", () => {
+    if (tree.selectedNode) {
+      tree.selectedNode.color = nodeColorInput.value;
+      renderTree();
+    }
+  });
 
   function restoreFromHistory(state: string) {
     const { tree: parsed } = parse(state);
@@ -444,6 +735,7 @@ export function startApp() {
     setTree(parsed);
     saveDoc(state);
     textInput.value = state;
+    afterProgrammaticValue();
     parseError.classList.remove("visible");
     renderTree();
   }
@@ -459,6 +751,15 @@ export function startApp() {
     const btn = (e.target as Element).closest("button");
     if (btn?.getAttribute("data-action") === "close-help")
       helpModal.classList.remove("active");
+  });
+  settingsModal.addEventListener("click", (e) => {
+    if (e.target === settingsModal) {
+      settingsModal.classList.remove("active");
+      return;
+    }
+    const btn = (e.target as Element).closest("button");
+    const action = btn?.getAttribute("data-action");
+    if (action && actions[action]) actions[action]();
   });
 
   function updateHistoryButtons() {
@@ -689,10 +990,48 @@ export function startApp() {
       cleanupDrag(true);
       return;
     }
+    // Escape cancels a pending arrow-link source.
+    if (e.key === "Escape" && linkSource) {
+      e.preventDefault();
+      linkSource = null;
+      renderTree();
+      flashStatus("Cancelled");
+      return;
+    }
+    // Escape closes any open modal, regardless of selection state.
+    if (
+      e.key === "Escape" &&
+      (helpModal.classList.contains("active") ||
+        settingsModal.classList.contains("active"))
+    ) {
+      e.preventDefault();
+      helpModal.classList.remove("active");
+      settingsModal.classList.remove("active");
+      return;
+    }
     if (typing) return; // don't hijack while editing text
-    if (!tree.selectedNode) return;
+    if (!tree.selectedNode) {
+      // Nothing selected but the user has Tabbed onto a node: adopt it as the
+      // selection so the next keystroke navigates from there.
+      const active = document.activeElement;
+      const g =
+        active instanceof Element && container.contains(active)
+          ? active.closest("[data-node-id]")
+          : null;
+      const adopted = g
+        ? getNodeById(Number(g.getAttribute("data-node-id")))
+        : null;
+      if (adopted) {
+        e.preventDefault();
+        tree.selectedNode = adopted;
+        renderTree();
+      }
+      return;
+    }
 
     const node = tree.selectedNode;
+    // Focus sits on the node group; keep arrow keys from scrolling the pane.
+    if (e.key.startsWith("Arrow")) e.preventDefault();
     switch (e.key) {
       case "ArrowUp":
         if (node.parent) {
@@ -756,6 +1095,9 @@ export function startApp() {
       case "b":
         actions.xbar();
         break;
+      case "B":
+        actions.cptp();
+        break;
       case "Delete":
       case "Backspace":
       case "d":
@@ -781,9 +1123,7 @@ export function startApp() {
         actions["paste-after"]();
         break;
       case "Escape":
-        if (helpModal.classList.contains("active")) {
-          helpModal.classList.remove("active");
-        } else if (tree.selectedNode) {
+        if (tree.selectedNode) {
           tree.selectedNode = null;
           navigationHistory.length = 0;
           renderTree();
@@ -794,12 +1134,19 @@ export function startApp() {
 
   // Reposition / dismiss inline editor on scroll & resize.
   container.addEventListener("scroll", cancelInlineEdit);
-  window.addEventListener("resize", () => tree && renderTree());
+  window.addEventListener("resize", () => {
+    syncScroll();
+    if (tree) renderTree();
+  });
 
   // ---- divider (resize panes) ----------------------------------------
   setupDivider();
 
   // ---- boot ----------------------------------------------------------
+  // Restore persisted display settings (font size, spacing, edge style,
+  // alignment, boxes, auto-subscript) before the first render.
+  loadPrefs();
+
   const savedTheme = loadTheme() || "light";
   document.documentElement.setAttribute("data-theme", savedTheme);
   if (savedTheme === "dark") {
@@ -813,6 +1160,7 @@ export function startApp() {
   setTree(parsed && !error ? parsed : parse(DEFAULT_DOC).tree!);
   tree.selectedNode = tree.root;
   textInput.value = serialize(tree);
+  afterProgrammaticValue();
   historyStack.push(serialize(tree));
   renderTree();
 }
@@ -832,8 +1180,13 @@ function setupDivider() {
   divider.addEventListener("pointermove", (e) => {
     if (!dragging) return;
     const rect = app.getBoundingClientRect();
-    const pct = ((e.clientX - rect.left) / rect.width) * 100;
-    const clamped = Math.min(85, Math.max(25, pct));
+    // Panes stack vertically on small screens (see the CSS media query), so
+    // resize along whichever axis is the flex main axis.
+    const vertical = getComputedStyle(app).flexDirection === "column";
+    const pct = vertical
+      ? ((e.clientY - rect.top) / rect.height) * 100
+      : ((e.clientX - rect.left) / rect.width) * 100;
+    const clamped = Math.min(85, Math.max(15, pct));
     treePane.style.flex = `0 0 ${clamped}%`;
   });
   const endDivide = () => {

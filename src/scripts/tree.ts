@@ -23,6 +23,16 @@ export class Node {
   subscript: string = "";
   superscript: string = "";
   triangle: boolean = false;
+  /** Optional per-node text color override, set via the Settings panel. Not
+   *  part of the bracket notation — like `id`, it's session-only and doesn't
+   *  survive a text-pane re-parse. */
+  color?: string;
+  /** Transient, render-time-only subscript computed by the "auto-subscript"
+   *  display option (repeated labels get numbered 1, 2, …). Never serialized
+   *  and never merged into `subscript`, so it can't pollute the notation or
+   *  spawn movement arrows; a manual `subscript` always wins. Recomputed on
+   *  every render (see `applyAutoSubscripts` / `buildSVG`). */
+  autoSubscript: string = "";
 
   children: Node[];
   parent: Node | null = null;
@@ -86,11 +96,17 @@ export class Node {
     this.updateTextWidth();
   }
 
+  /** Subscript to render: a manual `subscript` wins over an auto-subscript. */
+  displaySubscript(): string {
+    return this.subscript || this.autoSubscript;
+  }
+
   /** The label as shown, including sub/superscripts (used for width + export). */
   displayLabel(): string {
     let s = this.label;
     if (this.superscript) s += this.superscript;
-    if (this.subscript) s += this.subscript;
+    const sub = this.displaySubscript();
+    if (sub) s += sub;
     return s;
   }
 
@@ -98,8 +114,9 @@ export class Node {
     context.font = measureFont();
     const base = context.measureText(this.label).width;
     context.font = `${settings.label.fontSize * 0.7}px ${settings.label.fontFamily}`;
+    const sub = this.displaySubscript();
     const scriptWidth = Math.max(
-      this.subscript ? context.measureText(this.subscript).width : 0,
+      sub ? context.measureText(sub).width : 0,
       this.superscript ? context.measureText(this.superscript).width : 0
     );
     this.textWidth = Math.ceil(base + scriptWidth);
@@ -115,6 +132,7 @@ export class Node {
     copy.subscript = this.subscript;
     copy.superscript = this.superscript;
     copy.triangle = this.triangle;
+    copy.color = this.color;
     copy.updateTextWidth();
     this.children.forEach((child) => copy.insertChild(child.clone()));
     return copy;

@@ -1,7 +1,13 @@
 import { Tree, Node } from "./tree.js";
 import { buildSVG } from "./render.js";
+import { settings } from "./settings.js";
+import { applyAutoSubscripts } from "./edit.js";
 
-function svgString(tree: Tree): { xml: string; width: number; height: number } {
+export function svgString(tree: Tree): {
+  xml: string;
+  width: number;
+  height: number;
+} {
   const svg = buildSVG(tree, { interactive: false });
   const width = parseFloat(svg.getAttribute("width") || "800");
   const height = parseFloat(svg.getAttribute("height") || "600");
@@ -25,31 +31,62 @@ function triggerDownload(blob: Blob, filename: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+/** Rasterize the tree's SVG to a PNG blob (shared by download and clipboard copy). */
+function renderPNGBlob(tree: Tree, scale = 2): Promise<Blob> {
+  const { xml, width, height } = svgString(tree);
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const svgUrl = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(xml);
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.ceil(width * scale);
+      canvas.height = Math.ceil(height * scale);
+      const ctx = canvas.getContext("2d")!;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.scale(scale, scale);
+      ctx.drawImage(img, 0, 0);
+      canvas.toBlob((blob) => {
+        if (blob) resolve(blob);
+        else reject(new Error("Canvas rasterization failed"));
+      }, "image/png");
+    };
+    img.onerror = () => reject(new Error("Failed to rasterize SVG"));
+    img.src = svgUrl;
+  });
+}
+
 export function exportSVG(tree: Tree, filename = "syntax-tree.svg") {
   const { xml } = svgString(tree);
   triggerDownload(new Blob([xml], { type: "image/svg+xml" }), filename);
 }
 
 export function exportPNG(tree: Tree, filename = "syntax-tree.png", scale = 2) {
-  const { xml, width, height } = svgString(tree);
-  const img = new Image();
-  const svgUrl =
-    "data:image/svg+xml;charset=utf-8," + encodeURIComponent(xml);
-  img.onload = () => {
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.ceil(width * scale);
-    canvas.height = Math.ceil(height * scale);
-    const ctx = canvas.getContext("2d")!;
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.scale(scale, scale);
-    ctx.drawImage(img, 0, 0);
-    canvas.toBlob((blob) => {
-      if (blob) triggerDownload(blob, filename);
-    }, "image/png");
-  };
-  img.onerror = () => alert("PNG export failed while rasterizing the SVG.");
-  img.src = svgUrl;
+  renderPNGBlob(tree, scale)
+    .then((blob) => triggerDownload(blob, filename))
+    .catch(() => alert("PNG export failed while rasterizing the SVG."));
+}
+
+/**
+ * Copy the tree as a raster image to the system clipboard (PNG is the one
+ * image MIME type browsers reliably accept for `ClipboardItem`), so it can be
+ * pasted directly into documents/chat without a download step.
+ */
+export async function copyImagePNG(tree: Tree, scale = 2): Promise<void> {
+  if (!navigator.clipboard || typeof ClipboardItem === "undefined") {
+    throw new Error("Clipboard image copy isn't supported in this browser.");
+  }
+  const blob = await renderPNGBlob(tree, scale);
+  await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+}
+
+/** Copy the tree's raw SVG markup to the clipboard as text. */
+export async function copySVGMarkup(tree: Tree): Promise<void> {
+  if (!navigator.clipboard) {
+    throw new Error("Clipboard access isn't available in this browser.");
+  }
+  const { xml } = svgString(tree);
+  await navigator.clipboard.writeText(xml);
 }
 
 /** Escape text for LaTeX. */
@@ -58,15 +95,21 @@ function texEscape(s: string): string {
 }
 
 function scriptSuffix(node: Node): string {
-  if (!node.subscript && !node.superscript) return "";
+  // Mirror what's drawn on screen, including an auto-subscript when that
+  // display option is on (`toForest` refreshes it before building).
+  const sub = node.displaySubscript();
+  if (!sub && !node.superscript) return "";
   let s = "$";
   if (node.superscript) s += "^{" + texEscape(node.superscript) + "}";
-  if (node.subscript) s += "_{" + texEscape(node.subscript) + "}";
+  if (sub) s += "_{" + texEscape(sub) + "}";
   return s + "$";
 }
 
 /** Generate LaTeX code for the `forest` package. */
 export function toForest(tree: Tree): string {
+  // Refresh auto-subscripts so the export matches the rendered tree even if
+  // LaTeX is generated without a preceding on-screen render.
+  applyAutoSubscripts(tree, settings.autoSubscript);
   const build = (node: Node, depth: number): string => {
     const indent = "  ".repeat(depth + 1);
     if (node.isLeaf) {

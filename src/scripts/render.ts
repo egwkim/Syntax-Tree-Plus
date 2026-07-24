@@ -1,5 +1,6 @@
 import { Tree, Node } from "./tree.js";
 import { settings } from "./settings.js";
+import { applyAutoSubscripts } from "./edit.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -29,6 +30,10 @@ function attr(node: SVGElement, attrs: Record<string, string | number>) {
 export function buildSVG(tree: Tree, opts: RenderOptions = {}): SVGSVGElement {
   const margin = opts.margin ?? 24;
   const { height, verticalSpacing, horizontalSpacing } = settings.node;
+
+  // Compute auto-subscripts (if enabled) before measuring, so their width is
+  // reflected in layout. Writes only the transient `autoSubscript` field.
+  applyAutoSubscripts(tree, settings.autoSubscript);
 
   tree.calculateWidths();
   tree.recomputeDepth();
@@ -84,17 +89,25 @@ export function buildSVG(tree: Tree, opts: RenderOptions = {}): SVGSVGElement {
   });
   svg.style.display = "block";
   svg.style.maxWidth = "none";
+  // Expose the tree to assistive tech. Node groups (drawn below) are treeitems
+  // owned directly by this role="tree" element; the drawing layers are purely
+  // decorative and hidden from the accessibility tree.
+  attr(svg, {
+    role: "tree",
+    "aria-label": "Syntax tree — Tab to enter, arrow keys to navigate",
+  });
 
   defineArrowhead(svg);
 
   const edgesG = el("g");
   const trianglesG = el("g");
   const arrowsG = el("g");
-  const labelsG = el("g");
+  attr(edgesG, { "aria-hidden": "true" });
+  attr(trianglesG, { "aria-hidden": "true" });
+  attr(arrowsG, { "aria-hidden": "true" });
   svg.appendChild(edgesG);
   svg.appendChild(trianglesG);
   svg.appendChild(arrowsG);
-  svg.appendChild(labelsG);
 
   // --- Pass 2: draw ----------------------------------------------------
   tree.root.walk((node) => {
@@ -107,7 +120,9 @@ export function buildSVG(tree: Tree, opts: RenderOptions = {}): SVGSVGElement {
     });
   });
 
-  tree.root.walk((node) => drawLabel(labelsG, tree, node, opts));
+  // Append node groups directly to the <svg> so each treeitem is a direct
+  // child of role="tree"; drawn last so labels sit on top of the edges.
+  tree.root.walk((node) => drawLabel(svg, tree, node, opts));
 
   drawMovementArrows(arrowsG, arrowGroups, bottomRowY, height);
 
@@ -115,12 +130,29 @@ export function buildSVG(tree: Tree, opts: RenderOptions = {}): SVGSVGElement {
 }
 
 function drawEdge(g: SVGElement, parent: Node, child: Node) {
+  const x1 = parent.x;
+  const y1 = parent.y + settings.node.height / 2 - 4;
+  const x2 = child.x;
+  const y2 = child.y - settings.node.height / 2 + 4;
+
+  if (settings.edge.style === "curved") {
+    const midY = (y1 + y2) / 2;
+    const path = el("path");
+    attr(path, {
+      d: `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`,
+      fill: "none",
+      stroke: settings.edge.color,
+      "stroke-width": settings.edge.width,
+    });
+    g.appendChild(path);
+    return;
+  }
   const line = el("line");
   attr(line, {
-    x1: parent.x,
-    y1: parent.y + settings.node.height / 2 - 4,
-    x2: child.x,
-    y2: child.y - settings.node.height / 2 + 4,
+    x1,
+    y1,
+    x2,
+    y2,
     stroke: settings.edge.color,
     "stroke-width": settings.edge.width,
   });
@@ -145,11 +177,48 @@ function drawTriangle(g: SVGElement, parent: Node, leaf: Node) {
   g.appendChild(tri);
 }
 
+/** Human-readable name announced for a node by assistive tech. */
+function nodeAriaLabel(node: Node): string {
+  let s = node.label.trim() || "(blank)";
+  if (node.superscript) s += ", superscript " + node.superscript;
+  const sub = node.displaySubscript();
+  if (sub) s += ", subscript " + sub;
+  s += node.isLeaf ? ", terminal" : ", node";
+  return s;
+}
+
 function drawLabel(g: SVGElement, tree: Tree, node: Node, opts: RenderOptions) {
   const selected = tree.selectedNode === node;
   const group = el("g");
   group.setAttribute("data-node-id", String(node.id));
-  if (opts.interactive) group.style.cursor = "pointer";
+
+  // ARIA: every node is a treeitem, with level from its depth and the same
+  // selection state the SVG shows visually.
+  attr(group, {
+    role: "treeitem",
+    "aria-label": nodeAriaLabel(node),
+    "aria-level": node.depth + 1,
+    "aria-selected": String(selected),
+  });
+  if (node.children.length > 0) group.setAttribute("aria-expanded", "true");
+
+  if (opts.interactive) {
+    group.style.cursor = "pointer";
+    // Roving tabindex: exactly one node is in the tab order — the selected one,
+    // or the root when nothing is selected — so Tab reaches the tree once and
+    // arrow keys take over from there.
+    const isTabStop = tree.selectedNode
+      ? selected
+      : node === tree.root;
+    group.setAttribute("tabindex", isTabStop ? "0" : "-1");
+  }
+
+  // A per-node color override (Settings panel) tints the label and, when node
+  // boxes are visible, the box outline. It wins even while selected — the user
+  // sets it via the panel with the node selected, so it must stay visible then,
+  // not just after deselecting. Unset nodes keep the dark selected-text color
+  // for contrast against the light selection fill.
+  const textFill = node.color || (selected ? "#0b2a4a" : settings.label.color);
 
   if (settings.showNodeBoxes || selected) {
     const box = el("rect");
@@ -165,7 +234,7 @@ function drawLabel(g: SVGElement, tree: Tree, node: Node, opts: RenderOptions) {
       stroke: selected
         ? settings.fill.selectedStroke
         : settings.showNodeBoxes
-        ? "#bbb"
+        ? node.color || "#bbb"
         : "none",
       "stroke-width": 1.5,
     });
@@ -181,18 +250,18 @@ function drawLabel(g: SVGElement, tree: Tree, node: Node, opts: RenderOptions) {
     "font-size": settings.label.fontSize,
     "font-family": settings.label.fontFamily,
     "font-style": node.isLeaf && !node.triangle ? "italic" : "normal",
-    // The selection fill is always light, so use a dark label for contrast.
-    fill: selected ? "#0b2a4a" : settings.label.color,
+    fill: textFill,
   });
   text.textContent = node.label;
   group.appendChild(text);
 
   // Sub / superscripts, positioned just right of the base label.
-  if (node.subscript || node.superscript) {
+  const subscriptText = node.displaySubscript();
+  if (subscriptText || node.superscript) {
     const bw = baseTextWidth(node);
     const sx = node.x + bw / 2 + 1;
     const scriptSize = settings.label.fontSize * 0.7;
-    if (node.subscript) {
+    if (subscriptText) {
       const sub = el("text");
       attr(sub, {
         x: sx,
@@ -201,9 +270,9 @@ function drawLabel(g: SVGElement, tree: Tree, node: Node, opts: RenderOptions) {
         "dominant-baseline": "central",
         "font-size": scriptSize,
         "font-family": settings.label.fontFamily,
-        fill: selected ? "#0b2a4a" : settings.label.color,
+        fill: textFill,
       });
-      sub.textContent = node.subscript;
+      sub.textContent = subscriptText;
       group.appendChild(sub);
     }
     if (node.superscript) {
@@ -215,7 +284,7 @@ function drawLabel(g: SVGElement, tree: Tree, node: Node, opts: RenderOptions) {
         "dominant-baseline": "central",
         "font-size": scriptSize,
         "font-family": settings.label.fontFamily,
-        fill: selected ? "#0b2a4a" : settings.label.color,
+        fill: textFill,
       });
       sup.textContent = node.superscript;
       group.appendChild(sup);

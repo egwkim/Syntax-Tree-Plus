@@ -1,4 +1,5 @@
 export type LeafAlignment = "node" | "leaf";
+export type EdgeStyle = "straight" | "curved";
 
 export const settings = {
   node: {
@@ -18,6 +19,7 @@ export const settings = {
   edge: {
     color: "#555",
     width: 1.5,
+    style: "straight" as EdgeStyle,
   },
   triangle: {
     color: "#555",
@@ -37,6 +39,9 @@ export const settings = {
   leafAlignment: "leaf" as LeafAlignment,
   // Draw a border box around every node label.
   showNodeBoxes: false,
+  // Auto-number repeated node labels with subscripts (NP → NP₁, NP₂, …).
+  // Purely a display option (jsSyntaxTree parity) — see `applyAutoSubscripts`.
+  autoSubscript: false,
 };
 
 export type Settings = typeof settings;

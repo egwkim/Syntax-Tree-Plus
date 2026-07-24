@@ -37,7 +37,10 @@
 
       <div class="group">
         <button data-action="xbar" title="Expand to X-bar skeleton (b)">X-bar</button>
+        <button data-action="cptp" title="Expand to CP/TP clause skeleton (Shift+B)">CP/TP</button>
+        <button data-action="coordination" title="Wrap in a coordination (&amp;P) template">Coord</button>
         <button data-action="toggle-drag" title="Drag nodes to move them">✥ Move</button>
+        <button data-action="toggle-link" title="Link two nodes with a movement arrow">⤳ Arrow</button>
       </div>
 
       <div class="group">
@@ -49,12 +52,15 @@
         <button data-action="export-svg" title="Download SVG">SVG</button>
         <button data-action="export-png" title="Download PNG">PNG</button>
         <button data-action="export-latex" title="Download LaTeX (forest)">LaTeX</button>
+        <button data-action="copy-png-image" title="Copy tree image to the clipboard (PNG)">⧉ Copy PNG</button>
+        <button data-action="copy-svg-markup" title="Copy SVG markup to the clipboard">⧉ Copy SVG</button>
       </div>
 
       <div class="group right">
         <button data-action="toggle-align" title="Toggle leaf alignment">⇅ Align</button>
         <button data-action="toggle-boxes" title="Toggle node boxes">□ Boxes</button>
         <button data-action="toggle-theme" title="Toggle dark mode">◐ Theme</button>
+        <button data-action="settings" title="Settings">⚙ Settings</button>
         <button data-action="help" title="Keyboard shortcuts">? Help</button>
       </div>
     </header>
@@ -66,12 +72,15 @@
       <div id="divider" title="Drag to resize"></div>
       <section id="text-pane">
         <label class="pane-label" for="text-input">Bracket notation (jsSyntaxTree-compatible)</label>
-        <textarea
-          id="text-input"
-          spellcheck="false"
-          autocomplete="off"
-          autocapitalize="off"
-        ></textarea>
+        <div id="editor-wrap">
+          <div id="text-highlights" aria-hidden="true"></div>
+          <textarea
+            id="text-input"
+            spellcheck="false"
+            autocomplete="off"
+            autocapitalize="off"
+          ></textarea>
+        </div>
         <div id="parse-error"></div>
         <div id="round-trip-warning">
           ⚠ Two adjacent word-leaves under one node will merge into a single
@@ -112,7 +121,7 @@
           <tr><td>e / Enter / F2</td><td>Rename (inline)</td></tr>
           <tr><td>w</td><td>Wrap in new parent</td></tr>
           <tr><td>t</td><td>Toggle triangle on a terminal</td></tr>
-          <tr><td>b</td><td>Expand to X-bar skeleton</td></tr>
+          <tr><td>b / Shift+B</td><td>Expand to X-bar / CP-TP clause skeleton</td></tr>
           <tr><td>d / Delete</td><td>Delete node (children reattach)</td></tr>
           <tr><td>r</td><td>Reverse sibling order</td></tr>
           <tr><td>c / x / v</td><td>Copy / cut / paste subtree</td></tr>
@@ -138,12 +147,65 @@
             another to re-parent it. A caret shows exactly where it will land
             among the target's children. You can't drop a node into itself.
           </li>
+          <li>
+            <strong>⤳ Arrow mode:</strong> toggle it on, click a node (the
+            source), then click a second node (the target) to link them with a
+            movement arrow. Click the source again, or click empty space, to
+            cancel.
+          </li>
+          <li>
+            <strong>Templates:</strong> X-bar, CP/TP, and Coord expand the
+            selected node into a standard skeleton (X-bar: Spec/X'/Compl;
+            CP/TP: a full clause spine; Coord: <code>&amp;P</code> with two
+            conjuncts around a coordinator).
+          </li>
         </ul>
         <p class="tip">
           Tip: when renaming, type the full token including scripts, e.g.
           <code>DP_1</code> or <code>C^0</code>.
         </p>
         <button data-action="close-help">Close</button>
+      </div>
+    </div>
+
+    <div id="settings-modal" class="modal">
+      <div class="modal-body">
+        <h2>Settings</h2>
+        <div class="settings-grid">
+          <label for="setting-font-size">Font size</label>
+          <input type="number" id="setting-font-size" min="8" max="40" step="1" />
+
+          <label for="setting-h-spacing">Horizontal spacing</label>
+          <input type="number" id="setting-h-spacing" min="4" max="120" step="2" />
+
+          <label for="setting-v-spacing">Vertical spacing</label>
+          <input type="number" id="setting-v-spacing" min="30" max="200" step="2" />
+
+          <label for="setting-edge-style">Edge style</label>
+          <select id="setting-edge-style">
+            <option value="straight">Straight</option>
+            <option value="curved">Curved</option>
+          </select>
+
+          <label for="setting-auto-subscript">Auto-subscript</label>
+          <input type="checkbox" id="setting-auto-subscript" />
+
+          <label for="setting-node-color">Node color</label>
+          <div class="setting-color-row">
+            <input type="color" id="setting-node-color" />
+            <button type="button" data-action="reset-node-color">Reset</button>
+          </div>
+        </div>
+        <p class="tip">
+          <strong>Auto-subscript</strong> numbers repeated non-terminal node
+          labels (NP → NP₁, NP₂) for display only — it isn't written into the
+          bracket notation. Terminals (words) and nodes you've subscripted
+          yourself are left as-is.
+        </p>
+        <p class="tip" id="settings-color-hint">
+          Select a node in the tree to give it a custom color.
+        </p>
+        <button data-action="close-settings">Close</button>
       </div>
     </div>
 

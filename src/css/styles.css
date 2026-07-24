@@ -130,6 +130,17 @@ body {
   padding: 8px;
 }
 
+/* Keyboard focus ring on a node (roving tabindex). Mouse clicks don't show it
+   (:focus-visible), but the selection box already marks the active node. */
+#tree-container [data-node-id] {
+  outline: none;
+}
+#tree-container [data-node-id]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
 #divider {
   flex: 0 0 6px;
   cursor: col-resize;
@@ -154,18 +165,60 @@ body {
   padding: 8px 10px 4px;
 }
 
-#text-input {
+/* The text pane is a transparent <textarea> layered exactly over a mirror
+   <div> that re-renders the same text with highlighted brackets. Both must
+   share identical text metrics or the caret drifts from the rendered glyphs. */
+#editor-wrap {
   flex: 1 1 auto;
-  resize: none;
-  border: none;
-  outline: none;
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+}
+
+#text-highlights,
+#text-input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
   padding: 10px;
+  border: 0;
   font-family: "SF Mono", "Fira Code", Consolas, monospace;
   font-size: 14px;
   line-height: 1.6;
+  tab-size: 2;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+#text-highlights {
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+  z-index: 0;
   background: var(--panel);
   color: var(--text);
-  tab-size: 2;
+}
+
+#text-input {
+  z-index: 1;
+  resize: none;
+  outline: none;
+  overflow: auto;
+  /* Transparent glyphs let the mirror below show through; the caret and text
+     selection stay visible on their own. */
+  background: transparent;
+  color: transparent;
+  caret-color: var(--text);
+}
+
+/* Only color/box styling here — anything that changes glyph width would push
+   the mirror out of alignment with the textarea. */
+.bracket-match {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px var(--accent);
 }
 
 #parse-error {
@@ -236,6 +289,11 @@ body.drag-mode.is-dragging #tree-container {
 body.drag-mode #tree-container {
   user-select: none;
   touch-action: none; /* let pointer-drag work on touch without scrolling */
+}
+
+/* ---- Arrow-link mode (explicit movement-arrow tool) ---- */
+body.link-mode #tree-container [data-node-id] {
+  cursor: crosshair;
 }
 
 #divider {
@@ -316,7 +374,7 @@ body.drag-mode #tree-container {
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 24px 28px;
-  max-width: 560px;
+  width: min(560px, 92vw);
   max-height: 85vh;
   overflow: auto;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
@@ -363,4 +421,108 @@ body.drag-mode #tree-container {
   color: #fff;
   cursor: pointer;
   font-size: 14px;
+}
+
+/* ---- Settings panel ---- */
+.settings-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 10px 14px;
+  margin: 14px 0;
+}
+.settings-grid label {
+  font-size: 13px;
+  color: var(--muted);
+}
+.settings-grid input[type="number"],
+.settings-grid select {
+  font-size: 13px;
+  padding: 5px 7px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  width: 100px;
+}
+.setting-color-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+#setting-node-color {
+  width: 40px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+}
+#setting-node-color:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.setting-color-row button {
+  font-size: 12px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--btn-bg);
+  color: var(--text);
+  cursor: pointer;
+}
+.setting-color-row button:hover {
+  background: var(--btn-hover);
+}
+
+/* ---- Small screens ---- */
+@media (max-width: 760px) {
+  /* Stack the two panes vertically; the divider becomes a horizontal handle. */
+  #app {
+    flex-direction: column;
+  }
+  #tree-pane {
+    flex: 0 0 55%;
+  }
+  #text-pane {
+    min-width: 0;
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
+  #divider {
+    flex-basis: 8px;
+    cursor: row-resize;
+  }
+
+  /* Keep every tool reachable: the toolbar wraps, just more compactly. */
+  #toolbar {
+    gap: 4px;
+    padding: 6px 8px;
+  }
+  #toolbar .brand {
+    flex-basis: 100%;
+    margin: 0 0 2px;
+  }
+  #toolbar .group {
+    padding: 0 4px;
+    gap: 3px;
+  }
+  #toolbar .group.right {
+    margin-left: 0; /* wrap inline instead of forcing a full-width gap */
+  }
+  #toolbar button {
+    font-size: 12px;
+    padding: 6px 8px;
+  }
+}
+
+/* Coarse pointers (touch): give buttons a comfortable tap target. */
+@media (pointer: coarse) {
+  #toolbar button {
+    min-height: 40px;
+  }
+  #divider {
+    flex-basis: 12px;
+  }
 }
