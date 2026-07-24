@@ -1,13 +1,152 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tree Visualizer</title>
-    <link rel="stylesheet" href="css/styles.css">
-</head>
-<body>
-    <div id="tree-container"></div>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Syntax Tree Plus</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='13' font-size='13'%3E%F0%9F%8C%B3%3C/text%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="css/styles.css" />
+  </head>
+  <body>
+    <header id="toolbar">
+      <span class="brand">Syntax&nbsp;Tree&nbsp;Plus</span>
+
+      <div class="group">
+        <button data-action="child" title="Add child at end (n)">+ Child</button>
+        <button data-action="sib-before" title="Add sibling before (Shift+S)">+ Sib ◀</button>
+        <button data-action="sib-after" title="Add sibling after (s)">+ Sib ▶</button>
+      </div>
+
+      <div class="group">
+        <button data-action="copy" title="Copy subtree (c)">Copy</button>
+        <button data-action="cut" title="Cut subtree (x)">Cut</button>
+        <button data-action="paste" title="Paste as last child (v)">Paste</button>
+        <button data-action="paste-before" title="Paste as sibling before selection">Paste ◀</button>
+        <button data-action="paste-after" title="Paste as sibling after selection (Shift+V)">Paste ▶</button>
+      </div>
+
+      <div class="group">
+        <button data-action="rename" title="Rename node (e / Enter)">Rename</button>
+        <button data-action="triangle" title="Toggle triangle (t)">△ Triangle</button>
+        <button data-action="wrap" title="Wrap in new parent (w)">Wrap</button>
+        <button data-action="delete" title="Delete node (Del)">Delete</button>
+      </div>
+
+      <div class="group">
+        <button data-action="xbar" title="Expand to X-bar skeleton (b)">X-bar</button>
+        <button data-action="toggle-drag" title="Drag nodes to move them">✥ Move</button>
+      </div>
+
+      <div class="group">
+        <button data-action="undo" title="Undo (Ctrl+Z)">↶ Undo</button>
+        <button data-action="redo" title="Redo (Ctrl+Y)">↷ Redo</button>
+      </div>
+
+      <div class="group">
+        <button data-action="export-svg" title="Download SVG">SVG</button>
+        <button data-action="export-png" title="Download PNG">PNG</button>
+        <button data-action="export-latex" title="Download LaTeX (forest)">LaTeX</button>
+      </div>
+
+      <div class="group right">
+        <button data-action="toggle-align" title="Toggle leaf alignment">⇅ Align</button>
+        <button data-action="toggle-boxes" title="Toggle node boxes">□ Boxes</button>
+        <button data-action="toggle-theme" title="Toggle dark mode">◐ Theme</button>
+        <button data-action="help" title="Keyboard shortcuts">? Help</button>
+      </div>
+    </header>
+
+    <main id="app">
+      <section id="tree-pane">
+        <div id="tree-container"></div>
+      </section>
+      <div id="divider" title="Drag to resize"></div>
+      <section id="text-pane">
+        <label class="pane-label" for="text-input">Bracket notation (jsSyntaxTree-compatible)</label>
+        <textarea
+          id="text-input"
+          spellcheck="false"
+          autocomplete="off"
+          autocapitalize="off"
+        ></textarea>
+        <div id="parse-error"></div>
+        <div id="round-trip-warning">
+          ⚠ Two adjacent word-leaves under one node will merge into a single
+          triangle if you edit the text. Give each word its own labelled node
+          (e.g. <code>[N cat]</code>) to keep them separate.
+        </div>
+      </section>
+    </main>
+
+    <div id="help-modal" class="modal">
+      <div class="modal-body">
+        <h2>Syntax Tree Plus — Help</h2>
+        <p>
+          Edit the tree with the toolbar / keyboard, <em>or</em> type
+          <strong>labelled bracket notation</strong> in the right-hand pane.
+          Both stay in sync.
+        </p>
+        <h3>Notation</h3>
+        <ul class="notation">
+          <li><code>[S [NP the cat] [VP slept]]</code> — brackets nest structure.</li>
+          <li>Unclosed brackets are auto-closed as you type.</li>
+          <li>Select text and press <code>[</code> to wrap it in brackets.</li>
+          <li><code>[NP the big cat]</code> — a multi-word terminal draws a <strong>triangle</strong>.</li>
+          <li><code>NP_1</code> — <code>_</code> adds a <strong>subscript</strong> (co-index).</li>
+          <li><code>X^0</code> — <code>^</code> adds a <strong>superscript</strong>.</li>
+          <li>
+            Two nodes with the same subscript are linked by a
+            <strong>movement arrow</strong> when one is a trace
+            (<code>t</code>, <code>t*</code>, <code>e</code>).
+          </li>
+        </ul>
+        <h3>Keyboard</h3>
+        <table class="keys">
+          <tr><td>Arrow keys</td><td>Move selection (parent / child / sibling)</td></tr>
+          <tr><td>Shift + ← / →</td><td>Reorder siblings</td></tr>
+          <tr><td>n / Shift+N</td><td>Add child at end / at start</td></tr>
+          <tr><td>s / Shift+S</td><td>Add sibling after / before</td></tr>
+          <tr><td>e / Enter / F2</td><td>Rename (inline)</td></tr>
+          <tr><td>w</td><td>Wrap in new parent</td></tr>
+          <tr><td>t</td><td>Toggle triangle on a terminal</td></tr>
+          <tr><td>b</td><td>Expand to X-bar skeleton</td></tr>
+          <tr><td>d / Delete</td><td>Delete node (children reattach)</td></tr>
+          <tr><td>r</td><td>Reverse sibling order</td></tr>
+          <tr><td>c / x / v</td><td>Copy / cut / paste subtree</td></tr>
+          <tr><td>Ctrl+Z / Ctrl+Y</td><td>Undo / redo</td></tr>
+          <tr><td>Esc</td><td>Deselect (or click empty space)</td></tr>
+        </table>
+        <h3>Inserting &amp; moving</h3>
+        <ul class="notation">
+          <li>
+            <strong>Insert in the middle:</strong> select the node that should
+            come after your new one and use <strong>+ Sib ◀</strong> (before),
+            or select the one before it and use <strong>+ Sib ▶</strong> (after).
+          </li>
+          <li>
+            <strong>Paste</strong> drops the copied subtree in as the last
+            child of the selection. <strong>Paste ◀ / Paste ▶</strong> place it
+            as a sibling <em>before</em> / <em>after</em> the selection — so to
+            paste into the middle, select the node it should sit next to and use
+            ◀ or ▶ (exactly like the insert buttons).
+          </li>
+          <li>
+            <strong>✥ Move mode:</strong> toggle it on, then drag any node onto
+            another to re-parent it. A caret shows exactly where it will land
+            among the target's children. You can't drop a node into itself.
+          </li>
+        </ul>
+        <p class="tip">
+          Tip: when renaming, type the full token including scripts, e.g.
+          <code>DP_1</code> or <code>C^0</code>.
+        </p>
+        <button data-action="close-help">Close</button>
+      </div>
+    </div>
+
     <script type="module" src="scripts/main.js"></script>
-</body>
+  </body>
 </html>

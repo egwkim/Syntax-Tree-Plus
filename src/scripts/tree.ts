@@ -1,39 +1,66 @@
 import { settings } from "./settings.js";
 
+// Off-screen canvas used purely for measuring text widths.
 const canvas: HTMLCanvasElement = document.createElement("canvas");
 const context: CanvasRenderingContext2D = canvas.getContext("2d")!;
-context.font = `${settings.label.fontSize}px ${settings.label.fontFamily}`;
 
+function measureFont(): string {
+  return `${settings.label.fontSize}px ${settings.label.fontFamily}`;
+}
+
+let nextNodeId = 1;
+
+/**
+ * A single node in a syntax tree.
+ *
+ * A node is either an internal (labelled) node such as `NP`, `VP`, `S`, or a
+ * terminal (a word / span of words). Terminals are simply leaf nodes whose
+ * label is the word(s). A terminal spanning multiple words is drawn with a
+ * triangle (jsSyntaxTree convention).
+ */
 export class Node {
   label!: string;
+  subscript: string = "";
+  superscript: string = "";
+  triangle: boolean = false;
+
   children: Node[];
-  parent: Node | null;
-  textWidth: number = NaN;
-  width: number = NaN;
-  depth: number = NaN;
+  parent: Node | null = null;
   tree: Tree | null = null;
 
+  // Layout — populated by the renderer on every draw.
+  x: number = NaN;
+  y: number = NaN;
+  textWidth: number = NaN; // width of the label box
+  width: number = NaN; // width of the whole subtree
+  depth: number = NaN;
+
+  readonly id: number;
+
   constructor(label: string, parent: Node | null = null) {
-    this.updateLabel(label);
+    this.id = nextNodeId++;
     this.children = [];
-    this.parent = null;
+    this.updateLabel(label);
     if (parent) {
       parent.insertChild(this);
     }
   }
 
+  get isLeaf(): boolean {
+    return this.children.length === 0;
+  }
+
   insertChild(child: Node, idx: number = -1) {
+    if (child.parent) {
+      child.parent.removeChild(child);
+    }
     if (idx === -1) {
       this.children.push(child);
     } else {
       this.children.splice(idx, 0, child);
     }
     child.parent = this;
-    child.depth = this.depth + 1;
-    child.tree = this.tree || null;
-    if (child.tree && child.tree.maxDepth < child.depth) {
-      child.tree.maxDepth = child.depth;
-    }
+    child.setTree(this.tree);
   }
 
   removeChild(child: Node) {
@@ -44,41 +71,106 @@ export class Node {
     }
   }
 
+  /** Recursively propagate the owning tree and recompute depth. */
+  setTree(tree: Tree | null) {
+    this.tree = tree;
+    this.depth = this.parent ? this.parent.depth + 1 : 0;
+    if (tree && this.depth > tree.maxDepth) {
+      tree.maxDepth = this.depth;
+    }
+    this.children.forEach((c) => c.setTree(tree));
+  }
+
   updateLabel(newLabel: string) {
     this.label = newLabel;
     this.updateTextWidth();
   }
 
+  /** The label as shown, including sub/superscripts (used for width + export). */
+  displayLabel(): string {
+    let s = this.label;
+    if (this.superscript) s += this.superscript;
+    if (this.subscript) s += this.subscript;
+    return s;
+  }
+
   updateTextWidth(): number {
-    this.textWidth = Math.ceil(context.measureText(this.label).width);
+    context.font = measureFont();
+    const base = context.measureText(this.label).width;
+    context.font = `${settings.label.fontSize * 0.7}px ${settings.label.fontFamily}`;
+    const scriptWidth = Math.max(
+      this.subscript ? context.measureText(this.subscript).width : 0,
+      this.superscript ? context.measureText(this.superscript).width : 0
+    );
+    this.textWidth = Math.ceil(base + scriptWidth);
     if (this.textWidth < settings.node.minWidth) {
       this.textWidth = settings.node.minWidth;
     }
     return this.textWidth;
   }
+
+  /** Deep clone of this node and its subtree (no parent linkage). */
+  clone(): Node {
+    const copy = new Node(this.label);
+    copy.subscript = this.subscript;
+    copy.superscript = this.superscript;
+    copy.triangle = this.triangle;
+    copy.updateTextWidth();
+    this.children.forEach((child) => copy.insertChild(child.clone()));
+    return copy;
+  }
+
+  /** Visit this node and all descendants, depth-first. */
+  walk(fn: (n: Node) => void) {
+    fn(this);
+    this.children.forEach((c) => c.walk(fn));
+  }
 }
 
 export class Tree {
   root: Node;
-  selectedNode: Node | null;
+  selectedNode: Node | null = null;
   maxDepth: number = 0;
-  constructor() {
-    this.root = new Node("Root");
+
+  constructor(root?: Node) {
+    this.root = root ?? new Node("S");
     this.root.depth = 0;
-    this.selectedNode = null;
+    this.root.setTree(this);
+    this.recomputeDepth();
   }
 
+  /** Recompute depth + maxDepth for the whole tree. */
+  recomputeDepth() {
+    this.maxDepth = 0;
+    this.root.setTree(this);
+  }
+
+  /** Compute subtree widths for every node (used by the renderer for layout). */
   calculateWidths() {
-    function calculateNodeWidth(node: Node): number {
+    const calc = (node: Node): number => {
+      node.updateTextWidth();
+      const boxWidth = node.textWidth + settings.node.padding * 2;
+      if (node.isLeaf) {
+        node.width = Math.max(boxWidth, settings.node.minWidth);
+        return node.width;
+      }
       let childWidth = 0;
-      node.children.forEach((child: Node) => {
-        childWidth += calculateNodeWidth(child);
+      node.children.forEach((child) => {
+        childWidth += calc(child);
       });
-      childWidth +=
-        settings.node.horizontalSpacing * (node.children.length - 1);
-      node.width = Math.max(node.textWidth, childWidth);
+      childWidth += settings.node.horizontalSpacing * (node.children.length - 1);
+      node.width = Math.max(boxWidth, childWidth);
       return node.width;
-    }
-    calculateNodeWidth(this.root);
+    };
+    calc(this.root);
+  }
+
+  /** Depth of the deepest leaf (terminal row). */
+  maxLeafDepth(): number {
+    let max = 0;
+    this.root.walk((n) => {
+      if (n.isLeaf && n.depth > max) max = n.depth;
+    });
+    return max;
   }
 }
