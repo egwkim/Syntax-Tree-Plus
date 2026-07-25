@@ -1,16 +1,34 @@
 import { Tree, Node } from "./tree.js";
 import { render } from "./render.js";
-import { settings } from "./settings.js";
+import { settings, applyThemeColors } from "./settings.js";
 import { parse, parseLabel } from "./parser.js";
 import { serialize } from "./serialize.js";
 import { History } from "./history.js";
+import { Workspace } from "./tabs.js";
 import {
-  saveDoc,
-  loadDoc,
+  COMMANDS,
+  FIXED_KEYS,
+  bindingFor,
+  commandForKey,
+  commandDef,
+  canonicalFromEvent,
+  displayKey,
+  applyOverrides,
+  overrides as keymapOverrides,
+  resetBindings,
+  rebind,
+} from "./keymap.js";
+import {
   saveTheme,
   loadTheme,
   savePrefs,
   loadPrefs,
+  saveWorkspace,
+  loadWorkspace,
+  loadDoc,
+  fragmentDoc,
+  saveKeymap,
+  loadKeymap,
 } from "./persist.js";
 import {
   exportSVG,
@@ -18,6 +36,7 @@ import {
   exportLaTeX,
   copyImagePNG,
   copySVGMarkup,
+  copyLaTeX,
 } from "./export.js";
 import {
   matchBrackets,
@@ -62,10 +81,24 @@ export function startApp() {
   const autoSubscriptInput = document.getElementById("setting-auto-subscript") as HTMLInputElement;
   const nodeColorInput = document.getElementById("setting-node-color") as HTMLInputElement;
   const colorHint = document.getElementById("settings-color-hint") as HTMLElement;
+  const treePane = document.getElementById("tree-pane") as HTMLElement;
+  const tabbar = document.getElementById("tabbar") as HTMLElement;
+  const zoomLabel = document.getElementById("zoom-label") as HTMLElement;
+  const helpKeys = document.getElementById("help-keys") as HTMLElement;
+  const shortcutList = document.getElementById("shortcut-list") as HTMLElement;
 
   let tree!: Tree;
-  const historyStack = new History();
+  const workspace = new Workspace();
+  // One undo/redo history per tab, so switching tabs keeps each doc's history.
+  const histories = new Map<string, History>();
+  let historyStack = new History();
   const navigationHistory: number[] = [];
+  // Zoom: the built SVG carries the tree's natural pixel size in its width/
+  // height attributes (viewBox stays fixed); we scale those to zoom, so the
+  // pane's native scrollbars pan the enlarged content. 1 = 100%.
+  let zoom = 1;
+  const ZOOM_MIN = 0.2;
+  const ZOOM_MAX = 4;
   let clipboard: Node | null = null;
   let inlineEditor: HTMLInputElement | null = null;
   let dragMode = false;
@@ -92,11 +125,18 @@ export function startApp() {
     }
     return path;
   }
-  function nodeAtPath(t: Tree, path: number[]): Node | null {
+  /**
+   * Node at a child-index path — or, if that branch no longer exists (undo of
+   * an "add", a text edit that removed it), the deepest ancestor along the path
+   * that does. Falling back to the nearest ancestor keeps the selection where
+   * the user was working instead of throwing them back to the root.
+   */
+  function nodeAtPath(t: Tree, path: number[]): Node {
     let n: Node = t.root;
     for (const idx of path) {
-      if (!n.children[idx]) return null;
-      n = n.children[idx];
+      const child = n.children[idx];
+      if (!child) break;
+      n = child;
     }
     return n;
   }
@@ -104,7 +144,7 @@ export function startApp() {
   function setTree(newTree: Tree, keepSelectionPath?: number[]) {
     tree = newTree;
     if (keepSelectionPath) {
-      tree.selectedNode = nodeAtPath(tree, keepSelectionPath) ?? tree.root;
+      tree.selectedNode = nodeAtPath(tree, keepSelectionPath);
     } else if (!tree.selectedNode) {
       tree.selectedNode = tree.root;
     }
@@ -128,11 +168,16 @@ export function startApp() {
       ?.focus();
   }
 
+  // Natural (unzoomed) pixel size of the current SVG, from its viewBox.
+  let baseW = 0;
+  let baseH = 0;
+  let lastSvg: SVGSVGElement | null = null;
+
   function renderTree() {
     // The SVG is rebuilt from scratch, which drops focus; if the user was
     // navigating with the keyboard, put focus back on the selected node.
     const refocus = treeHasFocus();
-    render(tree, container, (node) => {
+    const svg = render(tree, container, (node) => {
       if (linkMode) {
         handleLinkClick(node);
         return;
@@ -141,11 +186,123 @@ export function startApp() {
       navigationHistory.length = 0;
       renderTree();
     });
+    lastSvg = svg;
+    baseW = Number(svg.getAttribute("width")) || svg.getBoundingClientRect().width;
+    baseH = Number(svg.getAttribute("height")) || svg.getBoundingClientRect().height;
+    applyZoom();
     updateHistoryButtons();
     updateRoundTripWarning();
     if (settingsModal.classList.contains("active")) syncSettingsInputs();
     if (refocus) focusSelectedNode();
   }
+
+  // ---- zoom & pan ----------------------------------------------------
+
+  function clampZoom(z: number): number {
+    return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+  }
+
+  /** Scale the rendered SVG to `zoom`; the pane's scrollbars then pan it. */
+  function applyZoom() {
+    if (!lastSvg || !baseW || !baseH) return;
+    lastSvg.style.width = baseW * zoom + "px";
+    lastSvg.style.height = baseH * zoom + "px";
+    if (zoomLabel) zoomLabel.textContent = Math.round(zoom * 100) + "%";
+  }
+
+  /** Set zoom, keeping the given client point fixed in the viewport. */
+  function setZoom(next: number, anchorX?: number, anchorY?: number) {
+    const z = clampZoom(next);
+    if (z === zoom) {
+      applyZoom();
+      return;
+    }
+    const rect = treePane.getBoundingClientRect();
+    // Default anchor: centre of the visible pane.
+    const ax = anchorX ?? rect.left + rect.width / 2;
+    const ay = anchorY ?? rect.top + rect.height / 2;
+    // Content coordinate under the anchor before the change.
+    const cx = (treePane.scrollLeft + (ax - rect.left)) / zoom;
+    const cy = (treePane.scrollTop + (ay - rect.top)) / zoom;
+    zoom = z;
+    applyZoom();
+    // Restore the same content point under the anchor after scaling.
+    treePane.scrollLeft = cx * zoom - (ax - rect.left);
+    treePane.scrollTop = cy * zoom - (ay - rect.top);
+  }
+
+  function zoomBy(factor: number) {
+    setZoom(zoom * factor);
+  }
+
+  /** Scale so the whole tree fits the pane, then centre it. Never enlarges. */
+  function fitToView() {
+    if (!baseW || !baseH) return;
+    const rect = treePane.getBoundingClientRect();
+    const pad = 16;
+    const z = clampZoom(
+      Math.min((rect.width - pad) / baseW, (rect.height - pad) / baseH, 1)
+    );
+    zoom = z;
+    applyZoom();
+    treePane.scrollLeft = (baseW * zoom - rect.width) / 2;
+    treePane.scrollTop = (baseH * zoom - rect.height) / 2;
+  }
+
+  function resetZoom() {
+    zoom = 1;
+    applyZoom();
+  }
+
+  // Ctrl/Cmd + wheel zooms toward the cursor (native browser zoom is suppressed).
+  treePane.addEventListener(
+    "wheel",
+    (e: WheelEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+      setZoom(zoom * factor, e.clientX, e.clientY);
+    },
+    { passive: false }
+  );
+
+  // Background drag-to-pan (only over empty canvas, and not in Move/Arrow mode
+  // where a background drag has other meaning). A node press is left alone.
+  let panning = false;
+  let panStartX = 0;
+  let panStartY = 0;
+  let panScrollLeft = 0;
+  let panScrollTop = 0;
+  let panMoved = false;
+  treePane.addEventListener("pointerdown", (e) => {
+    if (dragMode || linkMode) return;
+    if (e.button !== 0 || !e.isPrimary) return;
+    if ((e.target as Element).closest("[data-node-id]")) return;
+    panning = true;
+    panMoved = false;
+    panStartX = e.clientX;
+    panStartY = e.clientY;
+    panScrollLeft = treePane.scrollLeft;
+    panScrollTop = treePane.scrollTop;
+  });
+  treePane.addEventListener("pointermove", (e) => {
+    if (!panning) return;
+    const dx = e.clientX - panStartX;
+    const dy = e.clientY - panStartY;
+    if (!panMoved && Math.hypot(dx, dy) < 4) return;
+    panMoved = true;
+    treePane.classList.add("panning");
+    treePane.setPointerCapture(e.pointerId);
+    treePane.scrollLeft = panScrollLeft - dx;
+    treePane.scrollTop = panScrollTop - dy;
+  });
+  const endPan = () => {
+    if (panMoved) suppressClick = true; // don't let the pan end as a deselect
+    panning = false;
+    treePane.classList.remove("panning");
+  };
+  treePane.addEventListener("pointerup", endPan);
+  treePane.addEventListener("pointercancel", endPan);
 
   /**
    * Two-click picker for the explicit "Arrow" tool: the first click marks a
@@ -176,27 +333,26 @@ export function startApp() {
   }
 
   /**
-   * Warn when the tree contains two adjacent terminal leaves under one node:
-   * bracket notation would serialize them as one space-separated run and a
-   * text round-trip would merge them into a single (triangle) leaf.
+   * Every terminal arrangement is expressible now that adjacent terminals are
+   * quoted (`[NP "the big" "old cat"]`), so there's nothing left to warn about.
+   * The banner element is kept in the markup, permanently hidden, so the pane's
+   * layout is unchanged; drop both if no other warning ever needs it.
    */
   function updateRoundTripWarning() {
-    const warn = document.getElementById("round-trip-warning");
-    if (!warn) return;
-    let ambiguous = false;
-    tree.root.walk((n) => {
-      for (let i = 0; i < n.children.length - 1; i++) {
-        if (n.children[i].isLeaf && n.children[i + 1].isLeaf) ambiguous = true;
-      }
-    });
-    warn.classList.toggle("visible", ambiguous);
+    document.getElementById("round-trip-warning")?.classList.remove("visible");
+  }
+
+  /** Store `text` as the active tab's content and persist the whole workspace. */
+  function persistActive(text: string) {
+    workspace.setActiveText(text);
+    saveWorkspace(workspace.toStored());
   }
 
   /** Push current state to history + persist. Optionally refresh text pane. */
   function commit(updateText = true) {
     const text = serialize(tree);
     historyStack.push(text);
-    saveDoc(text);
+    persistActive(text);
     if (updateText) {
       textInput.value = text;
       afterProgrammaticValue();
@@ -226,7 +382,7 @@ export function startApp() {
       const path = tree ? pathOf(tree.selectedNode ?? tree.root) : [];
       setTree(parsed, path);
       historyStack.push(raw.trim());
-      saveDoc(raw);
+      persistActive(raw);
       renderTree();
     }, 250);
   }
@@ -357,8 +513,14 @@ export function startApp() {
 
   // ---- inline label editing (no prompt) ------------------------------
 
+  /**
+   * The node as a single editable token. A label holding a delimiter is quoted,
+   * so what the editor shows is exactly what `parseLabel` reads back on commit
+   * (`a_b` would otherwise return as base `a` + subscript `b`). Spaces are left
+   * bare — a multi-word terminal is the normal way to type a triangle.
+   */
   function rawToken(node: Node): string {
-    let s = node.label;
+    let s = /["[\]_^]/.test(node.label) ? `"${node.label.replace(/"/g, "")}"` : node.label;
     if (node.superscript) s += "^" + node.superscript;
     if (node.subscript) s += "_" + node.subscript;
     return s;
@@ -638,6 +800,11 @@ export function startApp() {
         .then(() => flashStatus("Copied SVG"))
         .catch((err: Error) => alert(err.message || "Couldn't copy the SVG."));
     },
+    "copy-latex": () => {
+      copyLaTeX(tree)
+        .then(() => flashStatus("Copied LaTeX"))
+        .catch((err: Error) => alert(err.message || "Couldn't copy the LaTeX."));
+    },
     "toggle-align"() {
       settings.leafAlignment = settings.leafAlignment === "leaf" ? "node" : "leaf";
       savePrefs();
@@ -650,6 +817,7 @@ export function startApp() {
     },
     "toggle-theme": () => toggleTheme(),
     help() {
+      renderHelpKeys();
       helpModal.classList.add("active");
     },
     "close-help"() {
@@ -657,15 +825,37 @@ export function startApp() {
     },
     settings() {
       syncSettingsInputs();
+      renderShortcutSettings();
       settingsModal.classList.add("active");
     },
     "close-settings"() {
+      capturingFor = null;
+      renderShortcutSettings();
       settingsModal.classList.remove("active");
     },
     "reset-node-color"() {
       if (!tree.selectedNode) return;
       delete tree.selectedNode.color;
       renderTree();
+    },
+    reverse() {
+      const sel = tree.selectedNode;
+      if (sel && sel.parent) {
+        sel.parent.children.reverse();
+        mutated();
+      }
+    },
+    "zoom-in": () => zoomBy(1.2),
+    "zoom-out": () => zoomBy(1 / 1.2),
+    "zoom-reset": () => resetZoom(),
+    "zoom-fit": () => fitToView(),
+    "new-tab": () => addTab(),
+    "reset-shortcuts"() {
+      resetBindings();
+      saveKeymap(keymapOverrides());
+      renderShortcutSettings();
+      renderHelpKeys();
+      flashStatus("Shortcuts reset to defaults");
     },
   };
 
@@ -732,8 +922,12 @@ export function startApp() {
   function restoreFromHistory(state: string) {
     const { tree: parsed } = parse(state);
     if (!parsed) return;
-    setTree(parsed);
-    saveDoc(state);
+    // Keep the selection across undo/redo by child-index path, the same way a
+    // text re-parse does — otherwise every undo throws the user back to the root.
+    const path = tree?.selectedNode ? pathOf(tree.selectedNode) : null;
+    setTree(parsed, path ?? undefined);
+    if (!path) tree.selectedNode = null; // nothing was selected — keep it that way
+    persistActive(state);
     textInput.value = state;
     afterProgrammaticValue();
     parseError.classList.remove("visible");
@@ -773,9 +967,7 @@ export function startApp() {
 
   function applyTheme(theme: string) {
     document.documentElement.setAttribute("data-theme", theme);
-    settings.label.color = theme === "dark" ? "#e8e8e8" : "#1a1a1a";
-    settings.edge.color = theme === "dark" ? "#aaa" : "#555";
-    settings.triangle.color = theme === "dark" ? "#aaa" : "#555";
+    applyThemeColors(theme === "dark" ? "dark" : "light");
     saveTheme(theme);
     if (tree) renderTree();
   }
@@ -1010,6 +1202,16 @@ export function startApp() {
       return;
     }
     if (typing) return; // don't hijack while editing text
+
+    // Global commands (zoom) act regardless of what's selected.
+    const canonical = canonicalFromEvent(e);
+    const globalCmd = commandForKey(canonical);
+    if (globalCmd && globalCmd.global && actions[globalCmd.id]) {
+      e.preventDefault();
+      actions[globalCmd.id]();
+      return;
+    }
+
     if (!tree.selectedNode) {
       // Nothing selected but the user has Tabbed onto a node: adopt it as the
       // selection so the next keystroke navigates from there.
@@ -1030,105 +1232,64 @@ export function startApp() {
     }
 
     const node = tree.selectedNode;
-    // Focus sits on the node group; keep arrow keys from scrolling the pane.
-    if (e.key.startsWith("Arrow")) e.preventDefault();
-    switch (e.key) {
-      case "ArrowUp":
-        if (node.parent) {
-          navigationHistory.push(node.parent.children.indexOf(node));
-          tree.selectedNode = node.parent;
-          renderTree();
-        }
-        break;
-      case "ArrowDown":
-        if (node.children.length > 0) {
-          let idx = 0;
-          if (navigationHistory.length > 0) {
-            idx = navigationHistory.pop()!;
-            if (idx >= node.children.length) idx = 0;
+    // Structural navigation keys stay fixed (not remappable) — they carry core
+    // tree semantics. Focus sits on the node group; keep arrows from scrolling.
+    if (e.key.startsWith("Arrow")) {
+      e.preventDefault();
+      switch (e.key) {
+        case "ArrowUp":
+          if (node.parent) {
+            navigationHistory.push(node.parent.children.indexOf(node));
+            tree.selectedNode = node.parent;
+            renderTree();
           }
-          tree.selectedNode = node.children[idx];
-          renderTree();
-        }
-        break;
-      case "ArrowLeft":
-      case "ArrowRight":
-        if (node.parent) {
-          const sibs = node.parent.children;
-          const idx = sibs.indexOf(node);
-          if (e.shiftKey) {
-            // Shift+arrow reorders siblings.
-            if (moveSibling(node, e.key === "ArrowLeft" ? -1 : 1)) mutated();
-          } else {
-            const t = e.key === "ArrowLeft" ? idx - 1 : idx + 1;
-            if (t >= 0 && t < sibs.length) {
-              tree.selectedNode = sibs[t];
-              navigationHistory.length = 0;
-              renderTree();
+          break;
+        case "ArrowDown":
+          if (node.children.length > 0) {
+            let idx = 0;
+            if (navigationHistory.length > 0) {
+              idx = navigationHistory.pop()!;
+              if (idx >= node.children.length) idx = 0;
+            }
+            tree.selectedNode = node.children[idx];
+            renderTree();
+          }
+          break;
+        case "ArrowLeft":
+        case "ArrowRight":
+          if (node.parent) {
+            const sibs = node.parent.children;
+            const idx = sibs.indexOf(node);
+            if (e.shiftKey) {
+              // Shift+arrow reorders siblings.
+              if (moveSibling(node, e.key === "ArrowLeft" ? -1 : 1)) mutated();
+            } else {
+              const t = e.key === "ArrowLeft" ? idx - 1 : idx + 1;
+              if (t >= 0 && t < sibs.length) {
+                tree.selectedNode = sibs[t];
+                navigationHistory.length = 0;
+                renderTree();
+              }
             }
           }
-        }
-        break;
-      case "n":
-        actions.child();
-        break;
-      case "N":
-        actions["child-start"]();
-        break;
-      case "s":
-        actions["sib-after"]();
-        break;
-      case "S":
-        actions["sib-before"]();
-        break;
-      case "w":
-        actions.wrap();
-        break;
-      case "e":
-      case "F2":
-        e.preventDefault();
-        actions.rename();
-        break;
-      case "t":
-        actions.triangle();
-        break;
-      case "b":
-        actions.xbar();
-        break;
-      case "B":
-        actions.cptp();
-        break;
-      case "Delete":
-      case "Backspace":
-      case "d":
-        e.preventDefault();
-        actions.delete();
-        break;
-      case "r":
-        if (node.parent) {
-          node.parent.children.reverse();
-          mutated();
-        }
-        break;
-      case "x":
-        actions.cut();
-        break;
-      case "c":
-        actions.copy();
-        break;
-      case "v":
-        actions.paste();
-        break;
-      case "V":
-        actions["paste-after"]();
-        break;
-      case "Escape":
-        if (tree.selectedNode) {
-          tree.selectedNode = null;
-          navigationHistory.length = 0;
-          renderTree();
-        }
-        break;
+          break;
+      }
+      return;
+    }
+    if (e.key === "Escape") {
+      if (tree.selectedNode) {
+        tree.selectedNode = null;
+        navigationHistory.length = 0;
+        renderTree();
+      }
+      return;
+    }
+
+    // Everything else is a remappable command, resolved through the keymap.
+    const cmd = commandForKey(canonical);
+    if (cmd && actions[cmd.id]) {
+      e.preventDefault();
+      actions[cmd.id]();
     }
   });
 
@@ -1139,6 +1300,272 @@ export function startApp() {
     if (tree) renderTree();
   });
 
+  // ---- tabs (multiple named trees) -----------------------------------
+
+  /** The undo history for a tab, created (with a baseline snapshot) on demand. */
+  function ensureHistory(id: string, baseline: string): History {
+    let h = histories.get(id);
+    if (!h) {
+      h = new History();
+      h.push(baseline);
+      histories.set(id, h);
+    }
+    return h;
+  }
+
+  /** Load the active tab into the live tree + text pane + its own history. */
+  function loadActiveTab() {
+    const tab = workspace.active;
+    historyStack = ensureHistory(tab.id, tab.text);
+    const { tree: parsed, error } = parse(tab.text);
+    setTree(parsed && !error ? parsed : tree ?? parse(DEFAULT_DOC).tree!);
+    tree.selectedNode = tree.root;
+    textInput.value = tab.text;
+    afterProgrammaticValue();
+    if (error) {
+      parseError.textContent = "⚠ " + error;
+      parseError.classList.add("visible");
+    } else {
+      parseError.classList.remove("visible");
+    }
+    renderTabs();
+    renderTree();
+  }
+
+  /** Persist the text pane's current content into the active tab if it parses. */
+  function flushActiveText() {
+    const { tree: parsed, error } = parse(textInput.value);
+    if (parsed && !error) persistActive(textInput.value);
+  }
+
+  function switchTab(id: string) {
+    if (id === workspace.activeId) return;
+    flushActiveText();
+    cancelInlineEdit();
+    workspace.setActive(id);
+    loadActiveTab();
+    saveWorkspace(workspace.toStored());
+  }
+
+  function addTab() {
+    flushActiveText();
+    const tab = workspace.add(DEFAULT_DOC);
+    ensureHistory(tab.id, tab.text);
+    loadActiveTab();
+    saveWorkspace(workspace.toStored());
+    flashStatus(`New tab: ${tab.name}`);
+  }
+
+  function closeTab(id: string) {
+    const wasActive = id === workspace.activeId;
+    const next = workspace.remove(id);
+    if (!next) {
+      flashStatus("Can't close the last tab");
+      return;
+    }
+    histories.delete(id);
+    if (wasActive) loadActiveTab();
+    else renderTabs();
+    saveWorkspace(workspace.toStored());
+  }
+
+  /** Inline-edit a tab's name (no prompt(), matching the node-rename pattern). */
+  function startTabRename(id: string) {
+    const tab = workspace.tabs.find((t) => t.id === id);
+    const tabEl = tabbar.querySelector<HTMLElement>(`[data-tab-id="${id}"]`);
+    const nameEl = tabEl?.querySelector<HTMLElement>(".tab-name");
+    if (!tab || !nameEl) return;
+    const input = document.createElement("input");
+    input.className = "tab-rename";
+    input.value = tab.name;
+    nameEl.replaceWith(input);
+    input.focus();
+    input.select();
+    let done = false;
+    const finish = (commit: boolean) => {
+      if (done) return;
+      done = true;
+      if (commit) {
+        const v = input.value.trim();
+        if (v) workspace.rename(id, v);
+      }
+      saveWorkspace(workspace.toStored());
+      renderTabs();
+    };
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") {
+        e.preventDefault();
+        finish(true);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        finish(false);
+      }
+    });
+    input.addEventListener("blur", () => finish(true));
+  }
+
+  function renderTabs() {
+    if (!tabbar) return;
+    tabbar.innerHTML = "";
+    const closable = workspace.tabs.length > 1;
+    for (const tab of workspace.tabs) {
+      const active = tab.id === workspace.activeId;
+      const el = document.createElement("div");
+      el.className = "tab" + (active ? " active" : "");
+      el.setAttribute("data-tab-id", tab.id);
+      el.setAttribute("role", "tab");
+      el.setAttribute("aria-selected", String(active));
+      el.tabIndex = 0;
+
+      const name = document.createElement("span");
+      name.className = "tab-name";
+      name.textContent = tab.name;
+      el.appendChild(name);
+
+      const close = document.createElement("button");
+      close.className = "tab-close";
+      close.type = "button";
+      close.title = "Close tab";
+      close.textContent = "×";
+      close.setAttribute("data-tab-close", tab.id);
+      close.disabled = !closable;
+      el.appendChild(close);
+
+      tabbar.appendChild(el);
+    }
+    const add = document.createElement("button");
+    add.className = "tab-add";
+    add.type = "button";
+    add.title = "New tree (tab)";
+    add.textContent = "+";
+    add.setAttribute("data-action", "new-tab");
+    tabbar.appendChild(add);
+  }
+
+  tabbar?.addEventListener("click", (e) => {
+    const target = e.target as Element;
+    const addBtn = target.closest('[data-action="new-tab"]');
+    if (addBtn) {
+      addTab();
+      return;
+    }
+    const closeBtn = target.closest<HTMLElement>("[data-tab-close]");
+    if (closeBtn) {
+      e.stopPropagation();
+      if (!(closeBtn as HTMLButtonElement).disabled)
+        closeTab(closeBtn.getAttribute("data-tab-close")!);
+      return;
+    }
+    const tabEl = target.closest<HTMLElement>("[data-tab-id]");
+    if (tabEl) switchTab(tabEl.getAttribute("data-tab-id")!);
+  });
+  tabbar?.addEventListener("dblclick", (e) => {
+    const tabEl = (e.target as Element).closest<HTMLElement>("[data-tab-id]");
+    if (tabEl) startTabRename(tabEl.getAttribute("data-tab-id")!);
+  });
+  tabbar?.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const tabEl = (e.target as Element).closest<HTMLElement>("[data-tab-id]");
+    if (tabEl) {
+      e.preventDefault();
+      switchTab(tabEl.getAttribute("data-tab-id")!);
+    }
+  });
+
+  // ---- keyboard-shortcut help + remap UI (rendered from the keymap) ----
+
+  /** Fill the help modal's shortcut table from the single keymap source. */
+  function renderHelpKeys() {
+    if (!helpKeys) return;
+    helpKeys.innerHTML = "";
+    const rows: { keys: string; label: string }[] = [];
+    for (const f of FIXED_KEYS) rows.push({ keys: f.keys, label: f.label });
+    for (const c of COMMANDS) {
+      const keys = [bindingFor(c.id), ...(c.extraKeys ?? [])]
+        .filter(Boolean)
+        .map(displayKey)
+        .join(" / ");
+      rows.push({ keys, label: c.label });
+    }
+    for (const r of rows) {
+      const tr = document.createElement("tr");
+      const td1 = document.createElement("td");
+      td1.textContent = r.keys;
+      const td2 = document.createElement("td");
+      td2.textContent = r.label;
+      tr.append(td1, td2);
+      helpKeys.appendChild(tr);
+    }
+  }
+
+  let capturingFor: string | null = null;
+
+  /** Render the remappable-shortcut list in the Settings panel. */
+  function renderShortcutSettings() {
+    if (!shortcutList) return;
+    shortcutList.innerHTML = "";
+    for (const c of COMMANDS) {
+      const row = document.createElement("div");
+      row.className = "shortcut-row";
+
+      const label = document.createElement("span");
+      label.className = "shortcut-label";
+      label.textContent = c.label;
+
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "shortcut-key";
+      btn.setAttribute("data-rebind", c.id);
+      btn.textContent =
+        capturingFor === c.id ? "Press a key…" : displayKey(bindingFor(c.id));
+      if (capturingFor === c.id) btn.classList.add("capturing");
+
+      row.append(label, btn);
+      shortcutList.appendChild(row);
+    }
+  }
+
+  /** Begin capturing the next keypress as a new binding for `id`. */
+  function beginCapture(id: string) {
+    capturingFor = id;
+    renderShortcutSettings();
+  }
+
+  // Capture a keypress for rebinding (only while the Settings panel is open and
+  // a row is armed). Runs at capture phase so it pre-empts the global handler.
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (!capturingFor) return;
+      // Ignore lone modifier presses — wait for the actual key.
+      if (["Shift", "Control", "Alt", "Meta"].includes(e.key)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        capturingFor = null;
+        renderShortcutSettings();
+        return;
+      }
+      const canonical = canonicalFromEvent(e);
+      const conflict = rebind(capturingFor, canonical);
+      if (conflict) {
+        flashStatus(`${displayKey(canonical)} is already used by "${conflict.label}"`);
+      } else {
+        saveKeymap(keymapOverrides());
+        renderHelpKeys();
+      }
+      capturingFor = null;
+      renderShortcutSettings();
+    },
+    true
+  );
+
+  shortcutList?.addEventListener("click", (e) => {
+    const btn = (e.target as Element).closest<HTMLElement>("[data-rebind]");
+    if (btn) beginCapture(btn.getAttribute("data-rebind")!);
+  });
+
   // ---- divider (resize panes) ----------------------------------------
   setupDivider();
 
@@ -1146,23 +1573,30 @@ export function startApp() {
   // Restore persisted display settings (font size, spacing, edge style,
   // alignment, boxes, auto-subscript) before the first render.
   loadPrefs();
+  applyOverrides(loadKeymap());
+  renderHelpKeys();
+  renderShortcutSettings();
 
   const savedTheme = loadTheme() || "light";
   document.documentElement.setAttribute("data-theme", savedTheme);
-  if (savedTheme === "dark") {
-    settings.label.color = "#e8e8e8";
-    settings.edge.color = "#aaa";
-    settings.triangle.color = "#aaa";
-  }
+  applyThemeColors(savedTheme === "dark" ? "dark" : "light");
 
-  const initial = loadDoc() || DEFAULT_DOC;
-  const { tree: parsed, error } = parse(initial);
-  setTree(parsed && !error ? parsed : parse(DEFAULT_DOC).tree!);
-  tree.selectedNode = tree.root;
-  textInput.value = serialize(tree);
-  afterProgrammaticValue();
-  historyStack.push(serialize(tree));
-  renderTree();
+  // Restore the tab workspace, migrating a legacy single-doc save into one tab.
+  // A shared link (`#t=`) always seeds/overrides the active tab's content.
+  const stored = loadWorkspace();
+  const restored = stored ? Workspace.fromStored(stored) : null;
+  if (restored) {
+    workspace.tabs = restored.tabs;
+    workspace.activeId = restored.activeId;
+  } else {
+    const legacy = loadDoc();
+    workspace.add(legacy && parse(legacy).tree ? legacy : DEFAULT_DOC, "Tree 1");
+  }
+  const shared = fragmentDoc();
+  if (shared && parse(shared).tree) workspace.active.text = shared;
+
+  loadActiveTab();
+  saveWorkspace(workspace.toStored());
 }
 
 function setupDivider() {

@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "build": "make build",
+    "test": "make test",
     "start": "make serve",
     "serve": "make serve",
     "watch": "nodemon -L --watch src --ext ts,js,html,css --exec \"make build && make serve\""

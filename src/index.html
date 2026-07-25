@@ -54,6 +54,14 @@
         <button data-action="export-latex" title="Download LaTeX (forest)">LaTeX</button>
         <button data-action="copy-png-image" title="Copy tree image to the clipboard (PNG)">⧉ Copy PNG</button>
         <button data-action="copy-svg-markup" title="Copy SVG markup to the clipboard">⧉ Copy SVG</button>
+        <button data-action="copy-latex" title="Copy LaTeX (forest) source to the clipboard">⧉ Copy LaTeX</button>
+      </div>
+
+      <div class="group">
+        <button data-action="zoom-out" title="Zoom out (-)">－</button>
+        <button data-action="zoom-reset" title="Reset zoom to 100% (0)"><span id="zoom-label">100%</span></button>
+        <button data-action="zoom-in" title="Zoom in (+)">＋</button>
+        <button data-action="zoom-fit" title="Fit tree to view (f)">⤢ Fit</button>
       </div>
 
       <div class="group right">
@@ -64,6 +72,8 @@
         <button data-action="help" title="Keyboard shortcuts">? Help</button>
       </div>
     </header>
+
+    <nav id="tabbar" role="tablist" aria-label="Trees"></nav>
 
     <main id="app">
       <section id="tree-pane">
@@ -82,11 +92,9 @@
           ></textarea>
         </div>
         <div id="parse-error"></div>
-        <div id="round-trip-warning">
-          ⚠ Two adjacent word-leaves under one node will merge into a single
-          triangle if you edit the text. Give each word its own labelled node
-          (e.g. <code>[N cat]</code>) to keep them separate.
-        </div>
+        <!-- No round-trip hazards remain (adjacent terminals are quoted), so
+             this stays empty and hidden; kept as a slot for future warnings. -->
+        <div id="round-trip-warning"></div>
       </section>
     </main>
 
@@ -107,26 +115,33 @@
           <li><code>NP_1</code> — <code>_</code> adds a <strong>subscript</strong> (co-index).</li>
           <li><code>X^0</code> — <code>^</code> adds a <strong>superscript</strong>.</li>
           <li>
+            <code>[NP the big cat_1]</code> — scripts attach to the
+            <strong>whole span</strong>, so a triangle can carry a movement index.
+          </li>
+          <li>
+            <code>[NP "the" "cat"]</code> — quote each word to keep two terminals
+            <strong>separate</strong>; <code>[NP the cat]</code> is one span
+            covering both.
+          </li>
+          <li>
+            <code>"…"</code> makes everything inside <strong>literal</strong>, so
+            a label can contain a space, <code>_</code>, <code>^</code> or a
+            bracket: <code>[N "a_b"]</code>, <code>["my node" x]</code>. There is
+            no backslash escape (matching jsSyntaxTree).
+          </li>
+          <li>
             Two nodes with the same subscript are linked by a
             <strong>movement arrow</strong> when one is a trace
             (<code>t</code>, <code>t*</code>, <code>e</code>).
           </li>
         </ul>
         <h3>Keyboard</h3>
+        <p class="tip">
+          Remappable shortcuts can be changed in
+          <strong>⚙ Settings → Keyboard shortcuts</strong>.
+        </p>
         <table class="keys">
-          <tr><td>Arrow keys</td><td>Move selection (parent / child / sibling)</td></tr>
-          <tr><td>Shift + ← / →</td><td>Reorder siblings</td></tr>
-          <tr><td>n / Shift+N</td><td>Add child at end / at start</td></tr>
-          <tr><td>s / Shift+S</td><td>Add sibling after / before</td></tr>
-          <tr><td>e / Enter / F2</td><td>Rename (inline)</td></tr>
-          <tr><td>w</td><td>Wrap in new parent</td></tr>
-          <tr><td>t</td><td>Toggle triangle on a terminal</td></tr>
-          <tr><td>b / Shift+B</td><td>Expand to X-bar / CP-TP clause skeleton</td></tr>
-          <tr><td>d / Delete</td><td>Delete node (children reattach)</td></tr>
-          <tr><td>r</td><td>Reverse sibling order</td></tr>
-          <tr><td>c / x / v</td><td>Copy / cut / paste subtree</td></tr>
-          <tr><td>Ctrl+Z / Ctrl+Y</td><td>Undo / redo</td></tr>
-          <tr><td>Esc</td><td>Deselect (or click empty space)</td></tr>
+          <tbody id="help-keys"></tbody>
         </table>
         <h3>Inserting &amp; moving</h3>
         <ul class="notation">
@@ -158,6 +173,20 @@
             selected node into a standard skeleton (X-bar: Spec/X'/Compl;
             CP/TP: a full clause spine; Coord: <code>&amp;P</code> with two
             conjuncts around a coordinator).
+          </li>
+        </ul>
+        <h3>Trees &amp; view</h3>
+        <ul class="notation">
+          <li>
+            <strong>Tabs:</strong> the bar under the toolbar holds multiple named
+            trees. <strong>+</strong> adds one, double-click a tab to rename it,
+            and <strong>×</strong> closes it. Each tab keeps its own undo history.
+          </li>
+          <li>
+            <strong>Zoom &amp; pan:</strong> use the ＋ / － / Fit buttons (or
+            <code>+</code> / <code>-</code> / <code>0</code> / <code>f</code>),
+            <code>Ctrl</code>/<code>⌘</code>+scroll to zoom toward the pointer,
+            and drag empty canvas to pan.
           </li>
         </ul>
         <p class="tip">
@@ -205,6 +234,19 @@
         <p class="tip" id="settings-color-hint">
           Select a node in the tree to give it a custom color.
         </p>
+
+        <div class="shortcuts-header">
+          <h3>Keyboard shortcuts</h3>
+          <button type="button" data-action="reset-shortcuts" class="shortcuts-reset">
+            Reset to defaults
+          </button>
+        </div>
+        <p class="tip">
+          Click a key, then press the new one. Navigation keys (arrows, undo/redo,
+          Esc) are fixed.
+        </p>
+        <div id="shortcut-list" class="shortcut-list"></div>
+
         <button data-action="close-settings">Close</button>
       </div>
     </div>

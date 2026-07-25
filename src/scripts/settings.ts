@@ -1,5 +1,6 @@
 export type LeafAlignment = "node" | "leaf";
 export type EdgeStyle = "straight" | "curved";
+export type ThemeName = "light" | "dark";
 
 export const settings = {
   node: {
@@ -45,3 +46,25 @@ export const settings = {
 };
 
 export type Settings = typeof settings;
+
+/**
+ * The drawing colors each theme implies. Single source of truth: the UI theme
+ * toggle and the exporters both go through `applyThemeColors`, so an export
+ * can't drift from what the theme actually draws. (The light values match the
+ * defaults above.)
+ */
+export const THEME_COLORS: Record<
+  ThemeName,
+  { label: string; edge: string; triangle: string }
+> = {
+  light: { label: "#1a1a1a", edge: "#555", triangle: "#555" },
+  dark: { label: "#e8e8e8", edge: "#aaa", triangle: "#aaa" },
+};
+
+/** Point the tree-drawing colors at a theme's palette. */
+export function applyThemeColors(theme: ThemeName) {
+  const c = THEME_COLORS[theme];
+  settings.label.color = c.label;
+  settings.edge.color = c.edge;
+  settings.triangle.color = c.triangle;
+}

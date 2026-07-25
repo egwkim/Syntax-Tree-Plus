@@ -15,6 +15,12 @@ clean:
 serve:
 	pnpm exec serve dist
 
+# Parser/serializer round-trip tests (Node's built-in runner, no deps).
+# Runs against the compiled output in dist/, so build first.
+.PHONY: test
+test: build
+	node --test test/*.test.mjs
+
 # Copy files from src to dist excluding *.ts
 .PHONY: copy
 copy:

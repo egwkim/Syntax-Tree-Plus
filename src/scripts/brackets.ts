@@ -20,12 +20,21 @@ export interface EditRange {
  * Match every balanced `[`…`]` pair in `text`. Returns a map keyed by *both*
  * indices of each pair (open->close and close->open) so a lookup from either
  * bracket is O(1). Unmatched brackets simply don't appear in the map.
+ *
+ * Brackets inside a `"…"` string are literal label text, not structure, so they
+ * are skipped — the same rule the parser's tokenizer applies.
  */
 export function matchBrackets(text: string): Map<number, number> {
   const matchOf = new Map<number, number>();
   const stack: number[] = [];
+  let inQuotes = false;
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
+    if (ch === '"') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+    if (inQuotes) continue;
     if (ch === "[") stack.push(i);
     else if (ch === "]") {
       const open = stack.pop();

@@ -16,6 +16,14 @@ export interface RenderOptions {
   interactive?: boolean;
   onNodeClick?: (node: Node, evt: MouseEvent) => void;
   margin?: number;
+  /**
+   * Draw the selection highlight (box + tinted label). Defaults to
+   * `interactive`, so an **export is a picture of the tree, not of the editing
+   * session** — otherwise a downloaded SVG/PNG carries whichever node happened
+   * to be selected, filled blue. The selection itself is untouched: only the
+   * drawing is suppressed.
+   */
+  showSelection?: boolean;
 }
 
 const el = (name: string): SVGElement => document.createElementNS(SVG_NS, name);
@@ -188,19 +196,24 @@ function nodeAriaLabel(node: Node): string {
 }
 
 function drawLabel(g: SVGElement, tree: Tree, node: Node, opts: RenderOptions) {
-  const selected = tree.selectedNode === node;
+  // `isSelected` is the model's truth (drives ARIA + the roving tabindex);
+  // `selected` is whether to *draw* it, which an export turns off.
+  const isSelected = tree.selectedNode === node;
+  const selected = isSelected && (opts.showSelection ?? !!opts.interactive);
   const group = el("g");
   group.setAttribute("data-node-id", String(node.id));
 
-  // ARIA: every node is a treeitem, with level from its depth and the same
-  // selection state the SVG shows visually.
+  // ARIA: every node is a treeitem, with level from its depth and the tree's
+  // selection state.
+  // No `aria-expanded`: nothing can collapse a subtree, and advertising an
+  // expanded/collapsed state that doesn't exist just misleads screen readers.
+  // Add it back if collapse/expand ever lands.
   attr(group, {
     role: "treeitem",
     "aria-label": nodeAriaLabel(node),
     "aria-level": node.depth + 1,
-    "aria-selected": String(selected),
+    "aria-selected": String(isSelected),
   });
-  if (node.children.length > 0) group.setAttribute("aria-expanded", "true");
 
   if (opts.interactive) {
     group.style.cursor = "pointer";
@@ -208,7 +221,7 @@ function drawLabel(g: SVGElement, tree: Tree, node: Node, opts: RenderOptions) {
     // or the root when nothing is selected — so Tab reaches the tree once and
     // arrow keys take over from there.
     const isTabStop = tree.selectedNode
-      ? selected
+      ? isSelected
       : node === tree.root;
     group.setAttribute("tabindex", isTabStop ? "0" : "-1");
   }

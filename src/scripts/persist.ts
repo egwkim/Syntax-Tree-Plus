@@ -1,25 +1,22 @@
 import { settings } from "./settings.js";
+import type { StoredWorkspace } from "./tabs.js";
 
 const STORAGE_KEY = "syntax-tree-plus:doc";
 const THEME_KEY = "syntax-tree-plus:theme";
 const PREFS_KEY = "syntax-tree-plus:prefs";
+const WORKSPACE_KEY = "syntax-tree-plus:workspace";
+const KEYMAP_KEY = "syntax-tree-plus:keymap";
 
-/** Persist the current document (bracket notation) to localStorage + URL. */
-export function saveDoc(text: string) {
-  try {
-    localStorage.setItem(STORAGE_KEY, text);
-  } catch {
-    /* storage may be unavailable (private mode) — ignore */
-  }
-  // Keep a shareable copy in the URL fragment without adding history entries.
+/** Mirror a bracket-notation doc into the URL fragment for shareable links. */
+export function updateFragment(text: string) {
   const hash = "#t=" + encodeURIComponent(text);
   if (location.hash !== hash) {
     history.replaceState(null, "", hash);
   }
 }
 
-/** Load a document: URL fragment wins over localStorage. Returns null if none. */
-export function loadDoc(): string | null {
+/** The document carried in the URL fragment (`#t=…`), if any — a shared link. */
+export function fragmentDoc(): string | null {
   const m = location.hash.match(/[#&]t=([^&]*)/);
   if (m) {
     try {
@@ -28,11 +25,84 @@ export function loadDoc(): string | null {
       /* fall through */
     }
   }
+  return null;
+}
+
+/** Persist the current active document (bracket notation) to localStorage + URL. */
+export function saveDoc(text: string) {
+  try {
+    localStorage.setItem(STORAGE_KEY, text);
+  } catch {
+    /* storage may be unavailable (private mode) — ignore */
+  }
+  updateFragment(text);
+}
+
+/** Load a document: URL fragment wins over localStorage. Returns null if none. */
+export function loadDoc(): string | null {
+  const frag = fragmentDoc();
+  if (frag !== null) return frag;
   try {
     return localStorage.getItem(STORAGE_KEY);
   } catch {
     return null;
   }
+}
+
+/** Persist the whole tab workspace and mirror the active doc into the URL. */
+export function saveWorkspace(ws: StoredWorkspace) {
+  try {
+    localStorage.setItem(WORKSPACE_KEY, JSON.stringify(ws));
+  } catch {
+    /* ignore */
+  }
+  const active = ws.tabs.find((t) => t.id === ws.activeId) ?? ws.tabs[0];
+  if (active) updateFragment(active.text);
+}
+
+/** Load the persisted workspace, or null if none / malformed. */
+export function loadWorkspace(): StoredWorkspace | null {
+  let raw: string | null = null;
+  try {
+    raw = localStorage.getItem(WORKSPACE_KEY);
+  } catch {
+    return null;
+  }
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && Array.isArray(parsed.tabs)) return parsed as StoredWorkspace;
+  } catch {
+    /* fall through */
+  }
+  return null;
+}
+
+/** Persist keyboard-shortcut overrides (command id → canonical binding). */
+export function saveKeymap(overrides: Record<string, string>) {
+  try {
+    localStorage.setItem(KEYMAP_KEY, JSON.stringify(overrides));
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Load keyboard-shortcut overrides, or null if none / malformed. */
+export function loadKeymap(): Record<string, string> | null {
+  let raw: string | null = null;
+  try {
+    raw = localStorage.getItem(KEYMAP_KEY);
+  } catch {
+    return null;
+  }
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") return parsed as Record<string, string>;
+  } catch {
+    /* fall through */
+  }
+  return null;
 }
 
 export function saveTheme(theme: string) {

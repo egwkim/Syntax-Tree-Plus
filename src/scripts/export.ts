@@ -1,23 +1,50 @@
 import { Tree, Node } from "./tree.js";
 import { buildSVG } from "./render.js";
-import { settings } from "./settings.js";
+import { settings, applyThemeColors } from "./settings.js";
 import { applyAutoSubscripts } from "./edit.js";
+
+/**
+ * Build the tree with the light palette whatever the UI theme is, then restore.
+ *
+ * Exports leave the app's dark background behind: the PNG rasterizer fills a
+ * white canvas, and an exported SVG is normally dropped into a white document.
+ * Dark-theme text (light grey) on either is effectively invisible, so the
+ * export is always drawn in the colors that read on white. Per-node `color`
+ * overrides are the user's explicit choice and are left untouched.
+ */
+function withExportColors<T>(fn: () => T): T {
+  const saved = {
+    label: settings.label.color,
+    edge: settings.edge.color,
+    triangle: settings.triangle.color,
+  };
+  applyThemeColors("light");
+  try {
+    return fn();
+  } finally {
+    settings.label.color = saved.label;
+    settings.edge.color = saved.edge;
+    settings.triangle.color = saved.triangle;
+  }
+}
 
 export function svgString(tree: Tree): {
   xml: string;
   width: number;
   height: number;
 } {
-  const svg = buildSVG(tree, { interactive: false });
-  const width = parseFloat(svg.getAttribute("width") || "800");
-  const height = parseFloat(svg.getAttribute("height") || "600");
-  const serializer = new XMLSerializer();
-  const xml = serializer.serializeToString(svg);
-  return {
-    xml: '<?xml version="1.0" encoding="UTF-8"?>\n' + xml,
-    width,
-    height,
-  };
+  return withExportColors(() => {
+    const svg = buildSVG(tree, { interactive: false, showSelection: false });
+    const width = parseFloat(svg.getAttribute("width") || "800");
+    const height = parseFloat(svg.getAttribute("height") || "600");
+    const serializer = new XMLSerializer();
+    const xml = serializer.serializeToString(svg);
+    return {
+      xml: '<?xml version="1.0" encoding="UTF-8"?>\n' + xml,
+      width,
+      height,
+    };
+  });
 }
 
 function triggerDownload(blob: Blob, filename: string) {
@@ -132,4 +159,12 @@ export function toForest(tree: Tree): string {
 export function exportLaTeX(tree: Tree, filename = "syntax-tree.tex") {
   const code = toForest(tree);
   triggerDownload(new Blob([code], { type: "text/plain" }), filename);
+}
+
+/** Copy the `forest` LaTeX source to the clipboard (no download step). */
+export async function copyLaTeX(tree: Tree): Promise<void> {
+  if (!navigator.clipboard) {
+    throw new Error("Clipboard access isn't available in this browser.");
+  }
+  await navigator.clipboard.writeText(toForest(tree));
 }

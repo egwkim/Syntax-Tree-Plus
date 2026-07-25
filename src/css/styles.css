@@ -108,6 +108,105 @@ body {
   border-color: var(--accent);
 }
 
+#zoom-label {
+  display: inline-block;
+  min-width: 3.2em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Tab bar (multiple named trees) ---- */
+#tabbar {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 4px 8px 0;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+#tabbar .tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 220px;
+  padding: 5px 6px 5px 12px;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+}
+#tabbar .tab:hover {
+  background: var(--btn-hover);
+}
+#tabbar .tab.active {
+  background: var(--bg);
+  color: var(--text);
+  border-color: var(--border);
+  font-weight: 600;
+  /* Overlap the bar's bottom border so the active tab reads as connected. */
+  margin-bottom: -1px;
+  padding-bottom: 6px;
+}
+#tabbar .tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 170px;
+}
+#tabbar .tab-close {
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 4px;
+  border-radius: 4px;
+  opacity: 0.6;
+}
+#tabbar .tab-close:hover:not(:disabled) {
+  background: var(--danger);
+  color: #fff;
+  opacity: 1;
+}
+#tabbar .tab-close:disabled {
+  visibility: hidden;
+}
+#tabbar .tab-add {
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  background: var(--panel-2);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 4px 12px;
+  align-self: flex-end;
+  margin-bottom: 1px;
+}
+#tabbar .tab-add:hover {
+  background: var(--btn-hover);
+}
+#tabbar .tab-rename {
+  font: inherit;
+  width: 120px;
+  padding: 1px 4px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  outline: none;
+}
+
 /* ---- Main split ---- */
 #app {
   flex: 1 1 auto;
@@ -128,6 +227,12 @@ body {
   min-width: 100%;
   min-height: 100%;
   padding: 8px;
+}
+
+/* Drag-to-pan on empty canvas (disabled in Move/Arrow modes, which have their
+   own background behaviour). */
+#tree-pane.panning {
+  cursor: grabbing;
 }
 
 /* Keyboard focus ring on a node (roving tabindex). Mouse clicks don't show it
@@ -474,6 +579,68 @@ body.link-mode #tree-container [data-node-id] {
 }
 .setting-color-row button:hover {
   background: var(--btn-hover);
+}
+
+/* ---- Keyboard-shortcut remapping (Settings) ---- */
+.shortcuts-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 18px;
+}
+.shortcuts-header h3 {
+  margin: 0;
+}
+.shortcuts-reset {
+  font-size: 12px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--btn-bg);
+  color: var(--text);
+  cursor: pointer;
+}
+.shortcuts-reset:hover {
+  background: var(--btn-hover);
+}
+.shortcut-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 10px 0;
+}
+.shortcut-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+}
+.shortcut-label {
+  font-size: 13px;
+}
+.shortcut-key {
+  flex: 0 0 auto;
+  min-width: 90px;
+  font-family: monospace;
+  font-size: 12px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--panel-2);
+  color: var(--accent);
+  cursor: pointer;
+  text-align: center;
+}
+.shortcut-key:hover {
+  background: var(--btn-hover);
+}
+.shortcut-key.capturing {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
 }
 
 /* ---- Small screens ---- */
