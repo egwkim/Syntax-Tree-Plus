@@ -4,7 +4,7 @@ import { settings, applyThemeColors, LeafAlignment } from "./settings.js";
 import { parseAll, parseLabel } from "./parser.js";
 import { serializeAll } from "./serialize.js";
 import { History } from "./history.js";
-import { Workspace } from "./tabs.js";
+import { Workspace, type TabData } from "./tabs.js";
 import { setupCompactToolbar } from "./toolbar.js";
 import {
   COMMANDS,
@@ -400,10 +400,26 @@ export function startApp() {
     document.getElementById("round-trip-warning")?.classList.remove("visible");
   }
 
-  /** Store `text` as the active tab's content and persist the whole workspace. */
+  /**
+   * Store `text` as the active tab's document and persist the whole workspace.
+   * Only text that parsed ever gets here, and it supersedes any pending draft.
+   */
   function persistActive(text: string) {
     workspace.setActiveText(text);
     saveWorkspace(workspace.toStored());
+    refreshTabMarkers();
+  }
+
+  /**
+   * Park pane text that doesn't parse on the active tab, so switching away and
+   * back (or reloading) doesn't throw away a half-typed tree. The tab's
+   * document — the last text that *did* parse — is left alone, which is what
+   * keeps the canvas, the undo history and share links on a valid document.
+   */
+  function persistDraft(text: string) {
+    workspace.setActiveDraft(text);
+    saveWorkspace(workspace.toStored());
+    refreshTabMarkers();
   }
 
   /** Push current state to history + persist. Optionally refresh text pane. */
@@ -434,6 +450,10 @@ export function startApp() {
       if (error || parsed.length === 0) {
         parseError.textContent = "⚠ " + (error ?? "Could not parse");
         parseError.classList.add("visible");
+        // Unparseable text is never promoted to the tab's document (the canvas
+        // and undo history would have nothing to show), but it is kept as a
+        // draft so it survives a tab switch or a reload.
+        persistDraft(raw);
         return;
       }
       parseError.classList.remove("visible");
@@ -955,6 +975,8 @@ export function startApp() {
     "zoom-reset": () => resetZoom(),
     "zoom-fit": () => fitToView(),
     "new-tab": () => addTab(),
+    "duplicate-tab": () => duplicateTab(),
+    "reopen-tab": () => reopenTab(),
     "reset-shortcuts"() {
       resetBindings();
       saveKeymap(keymapOverrides());
@@ -1093,17 +1115,43 @@ export function startApp() {
   // ---- transient status toast ----------------------------------------
 
   let statusTimer: number | undefined;
-  function flashStatus(msg: string) {
+
+  /**
+   * Transient message. With an `action` the toast grows a button and stays up
+   * long enough to click — that's the undo affordance for destructive-ish
+   * commands (closing a tab), in place of a confirm dialog the environment
+   * can't show.
+   */
+  function flashStatus(msg: string, action?: { label: string; run: () => void }) {
     let el = document.getElementById("status-toast");
     if (!el) {
       el = document.createElement("div");
       el.id = "status-toast";
       document.body.appendChild(el);
     }
-    el.textContent = msg;
-    el.classList.add("visible");
+    const toast = el;
+    const hide = () => toast.classList.remove("visible", "with-action");
+    toast.textContent = "";
+    const text = document.createElement("span");
+    text.textContent = msg;
+    toast.appendChild(text);
+    if (action) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "toast-action";
+      btn.textContent = action.label;
+      btn.addEventListener("click", () => {
+        hide();
+        action.run();
+      });
+      toast.appendChild(btn);
+    }
+    // `pointer-events` is off by default so a toast never eats a click on the
+    // canvas; only one carrying a button turns them back on.
+    toast.classList.toggle("with-action", !!action);
+    toast.classList.add("visible");
     window.clearTimeout(statusTimer);
-    statusTimer = window.setTimeout(() => el!.classList.remove("visible"), 900);
+    statusTimer = window.setTimeout(hide, action ? 7000 : 900);
   }
 
   // ---- drag to move nodes (drag mode) --------------------------------
@@ -1297,6 +1345,34 @@ export function startApp() {
       actions.redo();
       return;
     }
+    // Tab switching also works while typing — you shouldn't have to leave the
+    // text pane to reach another document. Fixed keys rather than `COMMANDS`
+    // entries for that reason (remappable commands are resolved after the
+    // typing guard below).
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && /^[1-9]$/.test(e.key)) {
+      e.preventDefault();
+      // 9 is "last tab", the convention every browser and editor uses.
+      const n = Number(e.key);
+      switchToIndex(n === 9 ? workspace.tabs.length - 1 : n - 1);
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key === "Tab") {
+      // Chrome and Firefox keep Ctrl+Tab for their own tab strip and won't let
+      // a page have it; where it does arrive, it should do the obvious thing.
+      // Ctrl+Alt+arrow below is the binding that always works.
+      e.preventDefault();
+      cycleTab(e.shiftKey ? -1 : 1);
+      return;
+    }
+    if (
+      (e.ctrlKey || e.metaKey) &&
+      e.altKey &&
+      (e.key === "ArrowLeft" || e.key === "ArrowRight")
+    ) {
+      e.preventDefault();
+      cycleTab(e.key === "ArrowLeft" ? -1 : 1);
+      return;
+    }
     // Escape cancels an in-progress drag (before other Escape handling).
     if (e.key === "Escape" && dragSource) {
       e.preventDefault();
@@ -1452,20 +1528,25 @@ export function startApp() {
     return h;
   }
 
-  /** Load the active tab into the live trees + text pane + its own history. */
+  /**
+   * Load the active tab into the live trees + text pane + its own history.
+   *
+   * The pane shows the draft when there is one (that's the point of drafts),
+   * but the *trees* always come from the tab's own document — never from
+   * whatever the previously active tab left in `trees`, which would hand two
+   * tabs the same `Tree` objects and serialize the old document into the new
+   * tab on its first edit.
+   */
   function loadActiveTab() {
     const tab = workspace.active;
     historyStack = ensureHistory(tab.id, tab.text);
-    const { trees: parsed, error } = parseAll(tab.text);
+    const shown = tab.draft ?? tab.text;
+    const { trees: parsed, error } = parseAll(shown);
     const loaded =
-      parsed.length > 0 && !error
-        ? parsed
-        : trees.length > 0
-        ? trees
-        : parseAll(DEFAULT_DOC).trees;
+      parsed.length > 0 && !error ? parsed : parseAll(tab.text).trees;
     // A freshly opened tab starts on its first tree, root selected.
-    setTrees(loaded, { tree: 0, path: [] });
-    textInput.value = tab.text;
+    setTrees(loaded.length > 0 ? loaded : [new Tree()], { tree: 0, path: [] });
+    textInput.value = shown;
     afterProgrammaticValue();
     if (error) {
       parseError.textContent = "⚠ " + error;
@@ -1477,10 +1558,15 @@ export function startApp() {
     renderTree();
   }
 
-  /** Persist the text pane's current content into the active tab if it parses. */
+  /**
+   * Persist the text pane's current content into the active tab before leaving
+   * it: as the document if it parses, as a draft if it doesn't. Either way
+   * nothing the user typed is dropped on the way out.
+   */
   function flushActiveText() {
     const { trees: parsed, error } = parseAll(textInput.value);
     if (parsed.length > 0 && !error) persistActive(textInput.value);
+    else persistDraft(textInput.value);
   }
 
   function switchTab(id: string) {
@@ -1501,17 +1587,80 @@ export function startApp() {
     flashStatus(`New tab: ${tab.name}`);
   }
 
+  /**
+   * Closing a tab used to be the one unrecoverable action in the app — it
+   * dropped the document *and* deleted its undo history. The closed tab is now
+   * held aside, history and all, so "Reopen" puts it back where it was with
+   * its undo stack intact. Only the last few are kept; older ones are really
+   * gone (that's what bounds the memory a session can hold on to).
+   */
+  const CLOSED_LIMIT = 10;
+  const closedTabs: { tab: TabData; index: number; history?: History }[] = [];
+
   function closeTab(id: string) {
     const wasActive = id === workspace.activeId;
-    const next = workspace.remove(id);
-    if (!next) {
+    // Leaving a tab is a flush point like switching away from it, or the draft
+    // the user was mid-way through typing would be lost with the close.
+    if (wasActive) flushActiveText();
+    const removed = workspace.remove(id);
+    if (!removed) {
       flashStatus("Can't close the last tab");
       return;
     }
+    const history = histories.get(id);
     histories.delete(id);
+    closedTabs.push({ ...removed, history });
+    if (closedTabs.length > CLOSED_LIMIT) closedTabs.shift();
     if (wasActive) loadActiveTab();
     else renderTabs();
     saveWorkspace(workspace.toStored());
+    flashStatus(`Closed "${removed.tab.name}"`, {
+      label: "Reopen",
+      run: reopenTab,
+    });
+  }
+
+  /** Put the most recently closed tab back, at its old position. */
+  function reopenTab() {
+    const entry = closedTabs.pop();
+    if (!entry) {
+      flashStatus("No recently closed tab");
+      return;
+    }
+    flushActiveText();
+    cancelInlineEdit();
+    workspace.insert(entry.tab, entry.index);
+    // Restoring the tab's id restores its undo history with it: `ensureHistory`
+    // finds this entry instead of starting a fresh stack.
+    if (entry.history) histories.set(entry.tab.id, entry.history);
+    loadActiveTab();
+    saveWorkspace(workspace.toStored());
+    flashStatus(`Reopened "${entry.tab.name}"`);
+  }
+
+  /** Copy the active tab (document, draft and all) in right after it. */
+  function duplicateTab() {
+    flushActiveText();
+    cancelInlineEdit();
+    const copy = workspace.duplicate(workspace.activeId);
+    if (!copy) return;
+    ensureHistory(copy.id, copy.text);
+    loadActiveTab();
+    saveWorkspace(workspace.toStored());
+    flashStatus(`Duplicated as "${copy.name}"`);
+  }
+
+  /** Switch by position — `Ctrl+1…9`, and the wrap-around cycle keys. */
+  function switchToIndex(i: number) {
+    const tab = workspace.tabs[i];
+    if (tab) switchTab(tab.id);
+  }
+
+  function cycleTab(dir: -1 | 1) {
+    const n = workspace.tabs.length;
+    if (n < 2) return;
+    const from = workspace.indexOf(workspace.activeId);
+    switchToIndex((from + dir + n) % n);
   }
 
   /** Inline-edit a tab's name (no prompt(), matching the node-rename pattern). */
@@ -1558,6 +1707,9 @@ export function startApp() {
       const active = tab.id === workspace.activeId;
       const el = document.createElement("div");
       el.className = "tab" + (active ? " active" : "");
+      // A tab holding text that doesn't parse gets a marker, so the draft
+      // isn't invisible state — you can see which tab you left mid-edit.
+      if (tab.draft !== undefined) el.classList.add("has-draft");
       el.setAttribute("data-tab-id", tab.id);
       el.setAttribute("role", "tab");
       el.setAttribute("aria-selected", String(active));
@@ -1566,6 +1718,7 @@ export function startApp() {
       const name = document.createElement("span");
       name.className = "tab-name";
       name.textContent = tab.name;
+      if (tab.draft !== undefined) name.title = "Unparsed text waiting in this tab";
       el.appendChild(name);
 
       const close = document.createElement("button");
@@ -1586,13 +1739,36 @@ export function startApp() {
     add.textContent = "+";
     add.setAttribute("data-action", "new-tab");
     tabbar.appendChild(add);
+
+    // Duplicate acts on the active tab, so it lives beside "+" rather than on
+    // every tab — one control, and the bar stays readable on a phone.
+    const dup = document.createElement("button");
+    dup.className = "tab-add tab-dup";
+    dup.type = "button";
+    dup.title = `Duplicate this tab (${displayKey(bindingFor("duplicate-tab"))})`;
+    dup.textContent = "⧉";
+    dup.setAttribute("data-action", "duplicate-tab");
+    tabbar.appendChild(dup);
+  }
+
+  /** Update just the draft markers, without rebuilding the bar (and with it
+   *  any in-progress rename input). */
+  function refreshTabMarkers() {
+    if (!tabbar) return;
+    for (const tab of workspace.tabs) {
+      tabbar
+        .querySelector(`[data-tab-id="${tab.id}"]`)
+        ?.classList.toggle("has-draft", tab.draft !== undefined);
+    }
   }
 
   tabbar?.addEventListener("click", (e) => {
     const target = e.target as Element;
-    const addBtn = target.closest('[data-action="new-tab"]');
-    if (addBtn) {
-      addTab();
+    // The bar's own buttons (+ / ⧉) go through the same `data-action` map the
+    // toolbar uses, so a tab command needs wiring in exactly one place.
+    const action = target.closest<HTMLElement>("[data-action]")?.getAttribute("data-action");
+    if (action && actions[action]) {
+      actions[action]();
       return;
     }
     const closeBtn = target.closest<HTMLElement>("[data-tab-close]");
@@ -1602,9 +1778,100 @@ export function startApp() {
         closeTab(closeBtn.getAttribute("data-tab-close")!);
       return;
     }
+    if (suppressTabClick) {
+      suppressTabClick = false;
+      return; // the click that ended a reorder drag
+    }
     const tabEl = target.closest<HTMLElement>("[data-tab-id]");
     if (tabEl) switchTab(tabEl.getAttribute("data-tab-id")!);
   });
+
+  // ---- drag a tab to reorder it ---------------------------------------
+  //
+  // Pointer events, like node dragging: mouse and pen start on a 5px move,
+  // touch on a long press — the bar scrolls horizontally on a phone, and a
+  // short horizontal drag has to stay a scroll. The model is reordered live
+  // and the bar re-rendered, so the tab follows the pointer with no separate
+  // drop indicator; the pointer is captured on the *bar*, so the re-render
+  // replacing the tab element under the cursor doesn't end the drag.
+  const TOUCH_HOLD_MS = 400;
+  let tabDragId: string | null = null;
+  let tabDragStartX = 0;
+  let tabDragArmed = false;
+  let tabDragMoved = false;
+  let tabHoldTimer: number | undefined;
+  let suppressTabClick = false;
+
+  function endTabDrag() {
+    window.clearTimeout(tabHoldTimer);
+    if (tabDragMoved) {
+      saveWorkspace(workspace.toStored());
+      suppressTabClick = true;
+    }
+    if (tabDragId) {
+      tabbar
+        ?.querySelector(`[data-tab-id="${tabDragId}"]`)
+        ?.classList.remove("dragging");
+    }
+    tabDragId = null;
+    tabDragArmed = false;
+    tabDragMoved = false;
+  }
+
+  /** Where the dragged tab belongs now: past every tab whose centre it's left. */
+  function tabDropIndex(clientX: number): number {
+    const els = Array.from(
+      tabbar?.querySelectorAll<HTMLElement>("[data-tab-id]") ?? []
+    );
+    for (let i = 0; i < els.length; i++) {
+      const r = els[i].getBoundingClientRect();
+      if (clientX < r.left + r.width / 2) return i;
+    }
+    return els.length - 1;
+  }
+
+  tabbar?.addEventListener("pointerdown", (e) => {
+    // A fresh interaction always starts unsuppressed: if the click that ended
+    // the last drag never landed on the bar, the flag mustn't eat this one.
+    suppressTabClick = false;
+    if (e.button !== 0 || !e.isPrimary) return;
+    const target = e.target as Element;
+    if (target.closest("button") || target.closest("input")) return;
+    const tabEl = target.closest<HTMLElement>("[data-tab-id]");
+    if (!tabEl || workspace.tabs.length < 2) return;
+    tabDragId = tabEl.getAttribute("data-tab-id");
+    tabDragStartX = e.clientX;
+    tabDragMoved = false;
+    tabDragArmed = e.pointerType !== "touch";
+    if (!tabDragArmed) {
+      tabHoldTimer = window.setTimeout(() => {
+        tabDragArmed = true;
+        tabEl.classList.add("dragging");
+      }, TOUCH_HOLD_MS);
+    }
+  });
+
+  tabbar?.addEventListener("pointermove", (e) => {
+    if (!tabDragId) return;
+    if (!tabDragArmed) {
+      // Moved before the hold elapsed: that's a scroll, not a reorder.
+      if (Math.abs(e.clientX - tabDragStartX) > 8) endTabDrag();
+      return;
+    }
+    if (!tabDragMoved) {
+      if (Math.abs(e.clientX - tabDragStartX) < 5) return;
+      tabDragMoved = true;
+      tabbar!.setPointerCapture(e.pointerId);
+    }
+    e.preventDefault();
+    if (workspace.move(tabDragId, tabDropIndex(e.clientX))) renderTabs();
+    tabbar
+      ?.querySelector(`[data-tab-id="${tabDragId}"]`)
+      ?.classList.add("dragging");
+  });
+
+  tabbar?.addEventListener("pointerup", endTabDrag);
+  tabbar?.addEventListener("pointercancel", endTabDrag);
   tabbar?.addEventListener("dblclick", (e) => {
     const tabEl = (e.target as Element).closest<HTMLElement>("[data-tab-id]");
     if (tabEl) startTabRename(tabEl.getAttribute("data-tab-id")!);
@@ -1730,21 +1997,32 @@ export function startApp() {
   applyThemeColors(savedTheme === "dark" ? "dark" : "light");
 
   // Restore the tab workspace, migrating a legacy single-doc save into one tab.
-  // A shared link (`#t=`) always seeds/overrides the active tab's content.
   const stored = loadWorkspace();
   const restored = stored ? Workspace.fromStored(stored) : null;
+  const fragment = fragmentDoc();
+  const shared =
+    fragment && parseAll(fragment).trees.length > 0 ? fragment : null;
+
   if (restored) {
     workspace.tabs = restored.tabs;
     workspace.activeId = restored.activeId;
   } else {
     const legacy = loadDoc();
-    workspace.add(
-      legacy && parseAll(legacy).trees.length > 0 ? legacy : DEFAULT_DOC,
-      "Tree 1"
-    );
+    const seed =
+      legacy && parseAll(legacy).trees.length > 0 ? legacy : shared ?? DEFAULT_DOC;
+    workspace.add(seed, "Tree 1");
   }
-  const shared = fragmentDoc();
-  if (shared && parseAll(shared).trees.length > 0) workspace.active.text = shared;
+
+  // A shared link opens as its **own tab**. The fragment normally just mirrors
+  // whatever tab is active, so an incoming document that matches one we already
+  // hold is that mirror and only needs focusing; anything else came from
+  // somebody else's link, and overwriting the active tab with it (as this used
+  // to do, localStorage included, with no way back) is data loss.
+  if (shared) {
+    const match = workspace.tabs.find((t) => t.text === shared);
+    if (match) workspace.setActive(match.id);
+    else workspace.add(shared, "Shared");
+  }
 
   loadActiveTab();
   saveWorkspace(workspace.toStored());

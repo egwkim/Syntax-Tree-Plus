@@ -47,13 +47,14 @@ pnpm run watch  # rebuild + serve on change
   (`Deploy <short-sha>`), so rollback = check out that commit and deploy again.
   Deploy refuses a dirty `src/` (`ALLOW_DIRTY=1` overrides) — a build from
   uncommitted source can't be reproduced by that rebuild path.
-- `make test` runs the parser/serializer round-trip tests (`test/*.test.mjs`:
-  `roundtrip` for one tree, `multitree` for a whole document) on
+- `make test` runs the unit tests (`test/*.test.mjs`: `roundtrip` for one tree,
+  `multitree` for a whole document, `tabs` for the workspace model) on
   Node's built-in runner — no test dependency. They build first and import from
   `dist/`; `test/dom-stub.mjs` fakes the canvas that `tree.ts` measures text
   with, so the notation is testable without a browser. Import it **before** any
-  module that pulls in `tree.js`. Whole-app behaviour is still verified ad-hoc
-  via Playwright driving the built app.
+  module that pulls in `tree.js` (`tabs.test.mjs` needs no stub — `tabs.ts`
+  imports nothing). Whole-app behaviour is still verified ad-hoc via Playwright
+  driving the built app.
 
 ## Architecture (`src/scripts/`)
 
@@ -69,9 +70,9 @@ Pure model/logic modules with one controller wiring them to the DOM.
 | `edit.ts` | Pure tree ops: add child/sibling (positional, each with a word-or-node choice), `toggleWordNode`, delete (promotes children), wrap, templates (X-bar, CP/TP, coordination), `linkNodes`/`nextSubscript` (movement-arrow tool), `applyAutoSubscripts` (auto-subscript display option), `reparent`, `isDescendant`. |
 | `export.ts` | Download SVG / PNG (SVG rasterized via canvas) / LaTeX `forest`, plus clipboard copy (PNG image, SVG markup, LaTeX). Takes the whole document (`Tree[]`) — an image carries every tree as laid out, LaTeX emits one `forest` environment per tree. Always draws with the light palette — see the export-colors note below. |
 | `history.ts` | Undo/redo over document snapshots (bracket strings). One instance **per tab**. |
-| `tabs.ts` | `Workspace` model: an ordered list of named documents (`TabData` = id/name/text) + which is active. Pure model — no DOM, no history; add/remove/rename/switch and `toStored`/`fromStored`. |
+| `tabs.ts` | `Workspace` model: an ordered list of named documents (`TabData` = id/name/`text` + an optional `draft`) + which is active. Pure model — no DOM, no history; add/insert/remove/duplicate/move/rename/switch and `toStored`/`fromStored`. `remove` returns the tab **and the index it sat at**, since putting one back also needs its undo history — which only the controller has, so the closed-tab stack lives there. |
 | `keymap.ts` | Single source of truth for keyboard shortcuts: the command list (id/label/default key/extra aliases), user remappings, canonical key encoding, and lookup. The help table and the remap UI are both rendered from it, so they can't drift. |
-| `persist.ts` | Autosave to localStorage + shareable URL fragment (`#t=`): the tab **workspace** (`saveWorkspace`/`loadWorkspace`, active doc mirrored to `#t=`), the theme, the display prefs (`savePrefs`/`loadPrefs`), the keymap overrides (`saveKeymap`/`loadKeymap`) and the compact toolbar's open category (`saveToolbarCat`/`loadToolbarCat`). `loadDoc` remains to migrate a legacy single-doc save into a tab on boot; `saveDoc` is now **unused** (the workspace blob replaced it) and only kept as its counterpart. |
+| `persist.ts` | Autosave to localStorage + shareable URL fragment (`#t=`): the tab **workspace** (`saveWorkspace`/`loadWorkspace`, active doc mirrored to `#t=`), the theme, the display prefs (`savePrefs`/`loadPrefs`), the keymap overrides (`saveKeymap`/`loadKeymap`) and the compact toolbar's open category (`saveToolbarCat`/`loadToolbarCat`). `loadDoc` remains to migrate a legacy single-doc save into a tab on boot — **localStorage only**, since an incoming `#t=` is a shared document that gets its own tab rather than replacing what this browser holds; `saveDoc` is now **unused** (the workspace blob replaced it) and only kept as its counterpart. |
 | `settings.ts` | Layout/style constants, the three-way `leafAlignment`, how several trees of one document are arranged (`forestLayout`/`forestGap`), theme colors. `THEME_COLORS` + `applyThemeColors` are the single source for the light/dark drawing palette (used by both the theme toggle and the exporters) — with one gap: the **selected** label's color is hardcoded in `drawLabel` (`#0b2a4a`) and `settings.label.selectedColor` is not read by anything. |
 | `toolbar.ts` | Compact (small-screen) toolbar: builds the category chip strip from the toolbar's own `.group[data-cat]` elements and shows one group at a time. Owns the `body.compact-toolbar` switch. |
 | `app.ts` | Controller. Owns the document's `trees` (+ which is active) and the `Workspace`, wires toolbar/keyboard/drag/text pane, tabs, zoom/pan, inline editing, theme. |
@@ -271,12 +272,48 @@ Pure model/logic modules with one controller wiring them to the DOM.
   persistence*; a tree is one bracket group inside it (see the bullet above) —
   so several related examples can share a tab and its history, or sit in
   separate tabs with separate ones. The controller keeps a `Map<tabId,
-  History>` so **undo is per-tab**, swapping `historyStack` on switch. Switching
-  flushes the text pane into the active tab first (`flushActiveText`, only if it
-  parses — matching the autosave rule that unparseable text is never saved). The
-  whole workspace is persisted as one JSON blob; the active tab's text is still
-  mirrored to `#t=` so share links keep working, and a legacy single-doc save (or
-  an incoming `#t=`) migrates into a tab on boot. The last tab can't be closed.
+  History>` so **undo is per-tab**, swapping `historyStack` on switch. The whole
+  workspace is persisted as one JSON blob; the active tab's text is mirrored to
+  `#t=` so share links keep working, and a legacy single-doc save migrates into
+  a tab on boot. The last tab can't be closed. The rest follows from "a tab is a
+  document the user can lose":
+  - **`text` is the document; `draft` is what's being typed.** A tab carries
+    both: `text` is the last string that *parsed* — what the canvas, the undo
+    history and `#t=` are all built from — and `draft` holds pane text the
+    parser rejected. Every debounced text edit parks one or the other
+    (`persistActive` / `persistDraft`), and so does leaving a tab
+    (`flushActiveText`, on switch/add/close), so a half-typed tree survives a
+    switch *and* a reload instead of being dropped; the tab wears a `•` while it
+    holds one. Text that parses — or any GUI edit — supersedes the draft.
+    `loadActiveTab` rebuilds trees from the tab's **own** `text` and nothing
+    else: falling back to the live `trees` handed two tabs the same `Tree`
+    objects, and the first edit then serialized the old document into the new
+    tab.
+  - **A shared `#t=` document arrives as its own tab.** The fragment normally
+    just mirrors the active tab, so on boot one that matches a tab already held
+    is that mirror and only gets focused; anything else came from somebody
+    else's link and lands in a new "Shared" tab. It used to overwrite the active
+    tab — localStorage included, with no undo, since history is keyed per tab id
+    and the pre-boot text was never pushed.
+  - **Closing is undoable.** `closeTab` pushes the tab, its index *and* its
+    `History` onto a bounded stack (`CLOSED_LIMIT`), and the toast grows a
+    **Reopen** button — `flashStatus` takes an optional action, and
+    `#status-toast` only accepts pointer events (and stays up longer) when it
+    carries one, so an ordinary message still can't intercept a click meant for
+    the canvas. Reopening re-inserts the tab under the **same id**, which is
+    exactly what hands it back its undo stack.
+  - **Duplicate / reorder / switch.** `⧉` in the tab bar copies the active tab in
+    beside itself (new id, so it gets its own history). Tabs drag sideways to
+    reorder: pointer events like node dragging, mouse/pen on a 5px move and
+    touch after a long press, since the bar is a horizontal scroller and a short
+    touch-drag has to stay a scroll; the pointer is captured on the **bar**, so
+    re-rendering the tab under the cursor doesn't end the drag.
+    `Ctrl+1…9` (9 = last) and `Ctrl+Alt+←/→` switch, and are **fixed** keys
+    handled beside Ctrl+Z *before* the "is the user typing" guard — you
+    shouldn't have to leave the text pane to reach another document.
+    `new-tab`/`duplicate-tab`/`reopen-tab` are ordinary remappable `COMMANDS`
+    (`Ctrl+Alt+N`/`D`/`Z`, each with a `Meta+…` alias for macOS). `Ctrl+Tab` is
+    handled as well, but most browsers keep it for their own tab strip.
 - **Zoom & pan**: zoom scales the *rendered* `<svg>`'s `width`/`height` (its
   `viewBox` is fixed), so the pane's native scrollbars do the panning — no custom
   transform math on the tree. `setZoom` keeps a client anchor point fixed
@@ -312,18 +349,6 @@ Pure model/logic modules with one controller wiring them to the DOM.
 (Completed work is documented in the sections above, not tracked here.)
 
 Bugs
-- [ ] **Opening a share link overwrites the active tab.** On boot `startApp` does
-      `workspace.active.text = shared` whenever `#t=` parses, then saves — so
-      following someone's link in a browser that already holds work replaces that
-      tab's document *and* its localStorage copy, with no prompt. Undo can't reach
-      it either: history is keyed per tab id and the pre-boot text was never
-      pushed. A shared doc should arrive as its **own new tab**. (Normally the
-      fragment just mirrors the active tab, which is why this stays invisible
-      until a foreign link is opened.)
-- [ ] **Unparseable text is discarded on tab switch.** `flushActiveText` only
-      saves when the text parses (matching the autosave rule), so a half-typed
-      tree in tab A vanishes on switching away and back. Keep a per-tab draft
-      string alongside the last-good text.
 - [ ] **LaTeX export doesn't escape `\`, `^`, `[` or `]`.** `texEscape`
       (`export.ts`) covers `&%$#_{}` and `~` only. Since the backslash stopped
       being an escape character in the notation, `[N back\slash]` is now a legal
@@ -386,14 +411,6 @@ Bugs
       that actually needs a quotation mark, e.g. citing a quoted word.
 
 Robustness
-- [ ] **Closing a tab is unrecoverable** — no confirm, and `closeTab` deletes
-      that tab's `History` outright. Add "reopen closed tab" (or an undo toast).
-- [ ] **A tab whose text won't parse borrows the previous tab's trees.**
-      `loadActiveTab`'s fallback chain ends in `: trees`, so the newly active tab
-      goes live over the *old* tab's `Tree` objects — two tabs then share node
-      identity, and the first edit serializes the old document into the new tab.
-      Only reachable from a malformed workspace blob or `#t=`, and the fix is a
-      one-liner (fall back to `DEFAULT_DOC` / a fresh `Tree`).
 - [ ] **Export and clipboard failures use `alert()`** (`export.ts`,
       `copy-*` actions), which the no-dialogs convention above rules out — in an
       environment that suppresses dialogs a failed PNG export reports nothing at
@@ -415,17 +432,15 @@ Robustness
       the whole document on every edit, so large trees mean multi-KB URLs
       rewritten per keystroke. Debounce it; consider compressing the payload.
 - [ ] Extend the test suite: `make test` covers parser/serializer round-trips
-      for one tree (`test/roundtrip.test.mjs`) and for a multi-tree document
-      (`test/multitree.test.mjs`), but `edit.ts`, `brackets.ts`, `tabs.ts` and
-      `keymap.ts` are all pure and untested, and there's no Playwright smoke test
-      in-repo yet.
+      (`test/roundtrip.test.mjs`, `test/multitree.test.mjs`) and the workspace
+      model (`test/tabs.test.mjs`), but `edit.ts`, `brackets.ts` and `keymap.ts`
+      are all pure and untested, and there's no Playwright smoke test in-repo
+      yet.
 
 Features
 - [ ] **Pretty-print button** for the text pane. `serializePretty` in
       `serialize.ts` is already written and currently **unused** — it just needs
       wiring to a toolbar/pane button.
-- [ ] **Tab ergonomics**: `Ctrl+1…9` / `Ctrl+Tab` switching, drag-to-reorder,
-      duplicate-tab. Cheap now that `COMMANDS` drives the keymap.
 - [ ] **Export options**: PNG scale is hardcoded at 2×; add a scale control, a
       transparent-background option, and batch export of every tab.
 - [ ] **Font family picker.** `settings.label.fontFamily` exists with no UI, and

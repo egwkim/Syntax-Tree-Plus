@@ -39,10 +39,13 @@ export function saveDoc(text: string) {
   updateFragment(text);
 }
 
-/** Load a document: URL fragment wins over localStorage. Returns null if none. */
+/**
+ * The legacy single-document save, migrated into a tab on boot. Reads
+ * localStorage only: the URL fragment is *not* consulted here, because a
+ * fragment is a shared document that gets its own tab (see `startApp`) rather
+ * than something that replaces what this browser already holds.
+ */
 export function loadDoc(): string | null {
-  const frag = fragmentDoc();
-  if (frag !== null) return frag;
   try {
     return localStorage.getItem(STORAGE_KEY);
   } catch {

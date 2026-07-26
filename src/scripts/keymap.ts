@@ -50,6 +50,15 @@ export const COMMANDS: CommandDef[] = [
   { id: "paste", label: "Paste as last child", defaultKey: "v", category: "Clipboard" },
   { id: "paste-after", label: "Paste as sibling after", defaultKey: "Shift+v", category: "Clipboard" },
 
+  // Tabs. Modifier chords, not bare letters: the single-character keys belong
+  // to the node-editing commands, and a tab command shouldn't need a selection.
+  // Each carries a `Meta+…` alias so ⌃⌥ and ⌘⌥ both work on macOS. (Switching
+  // between tabs is a fixed key — see FIXED_KEYS — since it also works while
+  // the text pane has focus.)
+  { id: "new-tab", label: "New tab", defaultKey: "Ctrl+Alt+n", extraKeys: ["Meta+Alt+n"], category: "Tabs", global: true },
+  { id: "duplicate-tab", label: "Duplicate this tab", defaultKey: "Ctrl+Alt+d", extraKeys: ["Meta+Alt+d"], category: "Tabs", global: true },
+  { id: "reopen-tab", label: "Reopen the last closed tab", defaultKey: "Ctrl+Alt+z", extraKeys: ["Meta+Alt+z"], category: "Tabs", global: true },
+
   // View
   { id: "zoom-in", label: "Zoom in", defaultKey: "=", category: "View", global: true },
   { id: "zoom-out", label: "Zoom out", defaultKey: "-", category: "View", global: true },
@@ -65,6 +74,9 @@ export const FIXED_KEYS: { keys: string; label: string; category: string }[] = [
   { keys: "Shift + ← / →", label: "Reorder siblings (on a root: reorder trees)", category: "Navigation" },
   { keys: "Ctrl+Z / Ctrl+Y", label: "Undo / redo", category: "Navigation" },
   { keys: "Esc", label: "Deselect / cancel (or click empty space)", category: "Navigation" },
+  { keys: "Ctrl+1 … Ctrl+9", label: "Switch to tab 1–9 (9 = last tab)", category: "Tabs" },
+  { keys: "Ctrl+Alt+← / →", label: "Previous / next tab (wraps around)", category: "Tabs" },
+  { keys: "Ctrl+Tab / Ctrl+Shift+Tab", label: "Next / previous tab, where the browser allows it", category: "Tabs" },
 ];
 
 const byId = new Map(COMMANDS.map((c) => [c.id, c]));
@@ -160,7 +172,8 @@ const KEY_DISPLAY: Record<string, string> = {
 export function displayKey(canonical: string): string {
   const parts = canonical.split("+");
   const key = parts.pop() ?? "";
-  const mods = parts;
+  // "Meta" is the Command key everywhere it's reachable; spell it as such.
+  const mods = parts.map((m) => (m === "Meta" ? "⌘" : m));
   const shown = KEY_DISPLAY[key] ?? (key.length === 1 ? key.toUpperCase() : key);
   return [...mods, shown].join(" + ");
 }

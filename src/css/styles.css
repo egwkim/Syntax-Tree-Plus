@@ -201,6 +201,22 @@ body {
 #tabbar .tab-add:hover {
   background: var(--btn-hover);
 }
+/* A tab whose text pane holds something that doesn't parse yet. */
+#tabbar .tab.has-draft .tab-name::after {
+  content: "•";
+  margin-left: 5px;
+  color: var(--danger);
+  font-weight: 700;
+}
+/* Being dragged to a new position (see the reorder handlers in app.ts). */
+#tabbar .tab.dragging {
+  opacity: 0.55;
+  cursor: grabbing;
+}
+#tabbar .tab-dup {
+  font-size: 13px;
+  padding: 5px 10px;
+}
 #tabbar .tab-rename {
   font: inherit;
   width: 120px;
@@ -463,6 +479,30 @@ body.link-mode #tree-container [data-node-id] {
 #status-toast.visible {
   opacity: 0.95;
   transform: translateX(-50%) translateY(0);
+}
+/* Only a toast carrying a button (e.g. "Reopen" after closing a tab) accepts
+   clicks — an ordinary message must never intercept one meant for the canvas. */
+#status-toast.with-action {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 8px 6px 16px;
+}
+#status-toast.with-action.visible {
+  pointer-events: auto;
+}
+#status-toast .toast-action {
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 14px;
+  background: transparent;
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  padding: 3px 12px;
+  cursor: pointer;
+}
+#status-toast .toast-action:hover {
+  background: rgba(255, 255, 255, 0.18);
 }
 
 /* ---- Modal ---- */
