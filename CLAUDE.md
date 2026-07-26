@@ -71,8 +71,8 @@ Pure model/logic modules with one controller wiring them to the DOM.
 | `history.ts` | Undo/redo over document snapshots (bracket strings). One instance **per tab**. |
 | `tabs.ts` | `Workspace` model: an ordered list of named documents (`TabData` = id/name/text) + which is active. Pure model — no DOM, no history; add/remove/rename/switch and `toStored`/`fromStored`. |
 | `keymap.ts` | Single source of truth for keyboard shortcuts: the command list (id/label/default key/extra aliases), user remappings, canonical key encoding, and lookup. The help table and the remap UI are both rendered from it, so they can't drift. |
-| `persist.ts` | Autosave to localStorage + shareable URL fragment (`#t=`): the tab **workspace** (`saveWorkspace`/`loadWorkspace`, active doc mirrored to `#t=`), the theme, the display prefs (`savePrefs`/`loadPrefs`), and the keymap overrides (`saveKeymap`/`loadKeymap`). `loadDoc` remains to migrate a legacy single-doc save into a tab on boot; `saveDoc` is now **unused** (the workspace blob replaced it) and only kept as its counterpart. |
-| `settings.ts` | Layout/style constants, the three-way `leafAlignment`, how several trees of one document are arranged (`forestLayout`/`forestGap`), theme colors. `THEME_COLORS` + `applyThemeColors` are the single source for the light/dark drawing palette (used by both the theme toggle and the exporters). |
+| `persist.ts` | Autosave to localStorage + shareable URL fragment (`#t=`): the tab **workspace** (`saveWorkspace`/`loadWorkspace`, active doc mirrored to `#t=`), the theme, the display prefs (`savePrefs`/`loadPrefs`), the keymap overrides (`saveKeymap`/`loadKeymap`) and the compact toolbar's open category (`saveToolbarCat`/`loadToolbarCat`). `loadDoc` remains to migrate a legacy single-doc save into a tab on boot; `saveDoc` is now **unused** (the workspace blob replaced it) and only kept as its counterpart. |
+| `settings.ts` | Layout/style constants, the three-way `leafAlignment`, how several trees of one document are arranged (`forestLayout`/`forestGap`), theme colors. `THEME_COLORS` + `applyThemeColors` are the single source for the light/dark drawing palette (used by both the theme toggle and the exporters) — with one gap: the **selected** label's color is hardcoded in `drawLabel` (`#0b2a4a`) and `settings.label.selectedColor` is not read by anything. |
 | `toolbar.ts` | Compact (small-screen) toolbar: builds the category chip strip from the toolbar's own `.group[data-cat]` elements and shows one group at a time. Owns the `body.compact-toolbar` switch. |
 | `app.ts` | Controller. Owns the document's `trees` (+ which is active) and the `Workspace`, wires toolbar/keyboard/drag/text pane, tabs, zoom/pan, inline editing, theme. |
 | `main.ts` | Entry point: `startApp()`. |
@@ -107,9 +107,16 @@ Pure model/logic modules with one controller wiring them to the DOM.
   on commit. `rawToken` quotes a label holding a delimiter, so reopening the editor
   on `a_b` shows `"a_b"` rather than silently re-splitting it into base +
   subscript. Blank leaves are discarded on commit/cancel.
-- **Movement arrows** are derived, not drawn explicitly: two nodes sharing a
-  subscript are linked when one is a trace (`t`, `t*`, `e`). No column-number
-  arrow syntax.
+- **Movement arrows** are derived, not drawn explicitly: **any** two nodes of one
+  tree that share a subscript are linked. A trace (`t`, `t*`, `e`, `*` —
+  `collectMovement`'s regex, case-insensitive) only decides *direction*: every
+  trace points at the first non-trace occurrence. With no trace among them, each
+  later occurrence points at the first, which is what makes Arrow mode work —
+  `linkNodes` just co-indexes two ordinary nodes and lets the renderer derive the
+  arrow. No column-number arrow syntax. A chain of more than one trace (e.g.
+  successive-cyclic movement through two specifier positions) fans every trace
+  out to the same antecedent instead of linking them step by step — see the
+  TODO.
 - **Words vs nodes** (`Node.isWord`, jsSyntaxTree's VALUE vs NODE). A leaf is not
   automatically a word: `[N cat]` is `N` over the **word** `cat`, while `[NP [N]]`
   is a childless **node** — a bare category, or a symbol slot the user hasn't
@@ -284,21 +291,90 @@ Pure model/logic modules with one controller wiring them to the DOM.
   stay hardcoded and non-remappable; everything else is a `COMMANDS` entry with a
   remappable primary key (+ optional fixed aliases like `Enter`/`F2`). Zoom
   commands are `global` (run without a selection). The Settings panel captures a
-  keypress to rebind (capture-phase listener, refuses conflicts); overrides
-  persist via `saveKeymap`. **Add a shortcut by adding a `COMMANDS` entry**, not a
-  `switch` case — the help table and remap UI regenerate from the list.
+  keypress to rebind (capture-phase listener); overrides persist via `saveKeymap`.
+  `rebind` refuses a key already taken by *another `COMMANDS` entry* — it does
+  **not** protect the hardcoded structural keys, so a command can currently be
+  bound to `ArrowUp`/`Ctrl+z`/`Escape` and silently never fire (see TODO).
+  **Add a shortcut by adding a `COMMANDS` entry**, not a `switch` case — the help
+  table and remap UI regenerate from the list.
 - Module imports use explicit `.js` extensions (ESM output).
 - `id` on `Node` is a per-session counter, not persisted.
+- **Deliberately unwired exports.** Several exports exist with no caller and are
+  not dead code by accident: `serializePretty` (awaiting the pretty-print button),
+  `saveDoc` (counterpart of the legacy `loadDoc`), `keymap.bindingToDefault`,
+  `Workspace.single`, `edit.addChild`/`addSibling` (back-compat wrappers over the
+  positional forms) and `settings.label.selectedColor`. `deleteNode`/`wrapNode`
+  also take a `tree` argument that only `wrapNode` uses. Check this list before
+  "cleaning up" or re-implementing one of them.
 
 ## TODO — open fixes & improvements
 
 (Completed work is documented in the sections above, not tracked here.)
 
 Bugs
+- [ ] **Opening a share link overwrites the active tab.** On boot `startApp` does
+      `workspace.active.text = shared` whenever `#t=` parses, then saves — so
+      following someone's link in a browser that already holds work replaces that
+      tab's document *and* its localStorage copy, with no prompt. Undo can't reach
+      it either: history is keyed per tab id and the pre-boot text was never
+      pushed. A shared doc should arrive as its **own new tab**. (Normally the
+      fragment just mirrors the active tab, which is why this stays invisible
+      until a foreign link is opened.)
 - [ ] **Unparseable text is discarded on tab switch.** `flushActiveText` only
       saves when the text parses (matching the autosave rule), so a half-typed
       tree in tab A vanishes on switching away and back. Keep a per-tab draft
       string alongside the last-good text.
+- [ ] **LaTeX export doesn't escape `\`, `^`, `[` or `]`.** `texEscape`
+      (`export.ts`) covers `&%$#_{}` and `~` only. Since the backslash stopped
+      being an escape character in the notation, `[N back\slash]` is now a legal
+      label and emits a raw control sequence; worse, `[N "[x]"]` emits `[[x]]`,
+      which breaks `forest`'s own bracket structure rather than merely mis-setting
+      a glyph. Needs `\textbackslash{}` / `\textasciicircum{}` and braced brackets.
+- [ ] **A chain of more than two co-indexed nodes draws parallel arrows instead
+      of a chain.** `collectMovement` (`render.ts`) buckets every node sharing a
+      subscript, and when the bucket holds more than one trace it links **all**
+      of them straight to `antecedents[0]` — so successive-cyclic movement
+      through two (or more) specifier positions, e.g.
+      `[TopP [DP_1 나는] [Top' [TP [DP_1 t] [T' [PredP [DP_1 t] ...`, draws two
+      separate arrows both landing on the topmost node instead of one chain
+      climbing trace → trace → antecedent. (Reported via screenshot: "두 번
+      이동할 때 아래쪽부터 차례대로 이동해야 되는데 화살표가 따로 노네".) Traces
+      need to be ordered by tree position and linked pairwise along the chain —
+      each to the next-higher occurrence — rather than fanned out to a single
+      target.
+- [ ] **A command can be rebound onto a hardcoded key.** `rebind` only scans other
+      `COMMANDS` entries, so binding one to `ArrowUp`, `Ctrl+z` or `Escape` is
+      accepted and then dead — `app.ts` handles those before consulting the keymap
+      and returns. `rebind`'s own doc comment already promises a reserved-key
+      sentinel (`{ id: "" }`) that was never implemented: either implement it
+      against a list of the structural keys, or drop the comment.
+- [ ] **An armed rebind survives closing Settings by clicking the backdrop.** The
+      `close-settings` action clears `capturingFor`, but the modal's
+      `e.target === settingsModal` branch returns before reaching it, and the
+      capture-phase key listener doesn't check whether the panel is open — so the
+      next keypress *anywhere*, including inside the text pane, is swallowed and
+      bound to the armed command.
+- [ ] **The inline editor doesn't survive a re-render, and races it.** `render()`
+      clears `#tree-container`, which is where `startInlineEdit` parks its
+      `<input>`. Any render while the editor is open (the `resize` handler is the
+      reachable path) removes the input mid-render; the resulting `blur` runs
+      `finish(true)` → `mutated()` → a **nested** `renderTree()` that appends its
+      SVG before the outer call appends its own, leaving two trees stacked in the
+      container. Call `cancelInlineEdit()` at the top of `renderTree`, as the
+      `scroll` handler already does.
+- [ ] **A triangle isn't cleared when a span is edited down to one word.** The
+      inline-edit commit sets `triangle = true` for a multi-word word but never
+      sets it back, so `the big cat` → `cat` keeps drawing a triangle until the
+      next text round-trip re-derives the flag. Same root cause as the per-node
+      `triangle` item below.
+- [ ] **Zoom in is documented as `+` but bound to `=`.** The button title in
+      `index.html` and the help modal both say `+`, while `COMMANDS` has `=` and
+      `canonicalFromEvent` renders Shift+= as `Shift++`, which matches nothing —
+      so pressing what the UI advertises does nothing. Add `+`/`Shift+=` as an
+      `extraKeys` alias, or fix the text.
+- [ ] **Undo from the text pane drops the caret to the end.** Ctrl+Z is captured
+      globally even while typing, and `restoreFromHistory` assigns
+      `textInput.value`, which resets the selection to the end of the document.
 - [ ] **A per-node `triangle` flag that disagrees with the label doesn't survive.**
       The flag isn't in the notation: `parse` derives it (a multi-word terminal is
       a triangle), so toggling it off with `t` on a multi-word leaf — or on with a
@@ -312,6 +388,29 @@ Bugs
 Robustness
 - [ ] **Closing a tab is unrecoverable** — no confirm, and `closeTab` deletes
       that tab's `History` outright. Add "reopen closed tab" (or an undo toast).
+- [ ] **A tab whose text won't parse borrows the previous tab's trees.**
+      `loadActiveTab`'s fallback chain ends in `: trees`, so the newly active tab
+      goes live over the *old* tab's `Tree` objects — two tabs then share node
+      identity, and the first edit serializes the old document into the new tab.
+      Only reachable from a malformed workspace blob or `#t=`, and the fix is a
+      one-liner (fall back to `DEFAULT_DOC` / a fresh `Tree`).
+- [ ] **Export and clipboard failures use `alert()`** (`export.ts`,
+      `copy-*` actions), which the no-dialogs convention above rules out — in an
+      environment that suppresses dialogs a failed PNG export reports nothing at
+      all. Route them through `flashStatus` like every other message.
+- [ ] **Accessibility outside the SVG.** The tree itself is a proper ARIA tree,
+      but its surroundings aren't: the modals are bare `<div class="modal">` (no
+      `role="dialog"`/`aria-modal`, no focus trap, focus isn't restored on close),
+      `#parse-error` and the `#status-toast` aren't live regions, so parse errors
+      and every toast ("Copied", "Only a leaf can be a word") are never announced,
+      every tab in `#tabbar` is `tabIndex=0` where `role="tab"` wants a roving
+      tabindex plus an `aria-controls` target, and `#divider` has no
+      `role="separator"` or keyboard resize.
+- [ ] **Text-pane bracket keys ignore modifiers**: the textarea `keydown` handler
+      matches `e.key === "["` (and `]`, Backspace) without checking
+      Ctrl/Alt/Meta, so an OS or browser chord ending in `[` still wraps the
+      selection. It also never checks `isComposing`, which is worth auditing for
+      IME input.
 - [ ] **URL fragment churn**: `updateFragment` runs `history.replaceState` with
       the whole document on every edit, so large trees mean multi-KB URLs
       rewritten per keystroke. Debounce it; consider compressing the payload.
@@ -331,3 +430,11 @@ Features
       transparent-background option, and batch export of every tab.
 - [ ] **Font family picker.** `settings.label.fontFamily` exists with no UI, and
       font choice matters for publication figures.
+- [ ] **Toolbar actions with no `COMMANDS` entry** (`coordination`,
+      `paste-before`, `toggle-align`, `toggle-boxes`, `toggle-theme`, `new-tab`)
+      have no key and therefore no row in the help table — the table only renders
+      `FIXED_KEYS` + `COMMANDS`. Give them entries, or render the keyless actions
+      too so Coord/Paste ◀ stop being invisible to keyboard users.
+- [ ] **Settings inputs validate looser than they advertise**: the markup carries
+      `min`/`max` (font size 8–40, spacing bounds), the handlers accept any
+      `> 0` / `>= 0`, so a typed-in 400 goes straight into the layout.
