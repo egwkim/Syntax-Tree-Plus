@@ -19,17 +19,31 @@ served as static files.
 pnpm install
 make build      # tsc -> dist/, then copy non-.ts files (html/css) into dist/
 make serve      # serve dist/ locally
+make dist       # point dist/ at the gh-pages branch (once, before the first deploy)
+make deploy     # build + publish dist/ to gh-pages
 pnpm run watch  # rebuild + serve on change
 ```
 
 - `tsc` outputs to `dist/` (see `tsconfig.json`: rootDir `src`, outDir `dist`).
-- `dist/` is git-ignored. **Deploy** (`make deploy`) publishes `dist/` to the
-  `gh-pages` branch via a git worktree. Caveat: the Makefile `dist` target tries to
-  make an *orphan* gh-pages branch, which fails once the branch exists — so today
-  each deploy **appends** a commit. To deploy onto the existing site, point the
-  worktree at `origin/gh-pages` first (`git worktree add -f dist gh-pages`), then
-  `make deploy`. This is *not* the intended model — `gh-pages` is meant to be wiped
-  to a single commit each deploy; see the deploy entry in the TODO.
+  Target is **ES2020** with `moduleResolution: bundler` — the sources import with
+  explicit `.js` extensions and the output is loaded as native ES modules by the
+  browser, so nothing bundles or down-levels it. Note `noEmitOnError` is off (the
+  tsc default), so a type error still writes JS; `make` halting on the `tsc` step
+  is what stops a broken build, and the `copy` step never runs — a `dist/` with
+  scripts but no `index.html` means the compile failed.
+- `dist/` is git-ignored in the main worktree because it *is* the `gh-pages`
+  worktree: `make dist` attaches it (creating the branch from `origin/gh-pages`,
+  or bootstrapping a parentless one on a repo that's never deployed). It's
+  idempotent and never switches branches in the main worktree. `make clean`
+  empties `dist/` but deliberately spares `dist/.git`, which would break the
+  worktree.
+- **`gh-pages` holds no history**: each `make deploy` replaces it with a *single
+  parentless commit*, built by `git commit-tree` (idempotent where
+  `checkout --orphan` was not) and force-pushed, since a parentless commit is
+  never a fast-forward. The message names the source commit
+  (`Deploy <short-sha>`), so rollback = check out that commit and deploy again.
+  Deploy refuses a dirty `src/` (`ALLOW_DIRTY=1` overrides) — a build from
+  uncommitted source can't be reproduced by that rebuild path.
 - `make test` runs the parser/serializer round-trip tests (`test/*.test.mjs`) on
   Node's built-in runner — no test dependency. They build first and import from
   `dist/`; `test/dom-stub.mjs` fakes the canvas that `tree.ts` measures text
@@ -263,32 +277,6 @@ Robustness
       (`test/roundtrip.test.mjs`), but `edit.ts`, `brackets.ts`, `tabs.ts` and
       `keymap.ts` are all pure and untested, and there's no Playwright smoke test
       in-repo yet.
-- [ ] **`make deploy` doesn't implement the intended deploy model.** `gh-pages` is
-      derived output and is meant to be *wiped every deploy*, leaving a single
-      commit (rollback = check out an older `main` and rebuild). Two reasons it
-      instead accumulates commits: `deploy` pushes without `--force`, and a
-      parentless commit is never a fast-forward, so such a push is rejected; and
-      `dist`'s wipe is guarded by `if git checkout --orphan=gh-pages`, which
-      fatals with "a branch named 'gh-pages' already exists" on every run after
-      the first, so the branch is never re-orphaned. Fix, in `deploy`:
-      ```make
-      cd $(DIST_DIR) && git add --all && \
-      commit=$$(git commit-tree $$(git write-tree) \
-                 -m "Deploy $$(git -C .. rev-parse --short HEAD)") && \
-      git reset -q --hard $$commit && \
-      git push --force origin HEAD:gh-pages
-      ```
-      `commit-tree` with no `-p` builds a parentless commit directly, so it's
-      always exactly one commit and — unlike `--orphan` — it's idempotent.
-      Two things worth adding at the same time: embed the **source commit SHA** in
-      the message (as above), since otherwise nothing records which commit is
-      live, and **refuse to deploy a dirty tree** (`git diff --quiet HEAD -- src`),
-      since a build from uncommitted source can't be reproduced by the rebuild
-      rollback path. `dist` then reduces to `git worktree add -f dist gh-pages`
-      (note: the Makefile's `--relative-paths` is a newer git option — 2.43
-      rejects it, so drop it unless you know the toolchain has it). Once this
-      lands, the next deploy collapses `gh-pages` to the single commit it should
-      have been.
 
 Features
 - [ ] **Pretty-print button** for the text pane. `serializePretty` in
