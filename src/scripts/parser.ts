@@ -5,6 +5,12 @@ export interface ParseResult {
   error: string | null;
 }
 
+export interface ParseAllResult {
+  /** Every top-level tree in the document, in document order. */
+  trees: Tree[];
+  error: string | null;
+}
+
 /**
  * Characters that end a bare (unquoted) token — the same set jsSyntaxTree's
  * tokenizer breaks on. There is deliberately **no escape character**: a literal
@@ -150,9 +156,15 @@ export function parseLabel(raw: string): {
 }
 
 /**
- * Parse labelled bracket notation into a Tree.
+ * Parse a document into **every** tree it contains.
  *
- * Grammar (jsSyntaxTree-compatible):
+ * A document is a sequence of top-level bracket groups, so one text pane (one
+ * tab) can hold several trees:
+ *
+ *   `[S [NP Mary] [VP left]]  [S [NP John] [VP stayed]]`
+ *
+ * Grammar (jsSyntaxTree-compatible per tree):
+ *   document := node*
  *   node     := '[' label content ']'
  *   content  := ( node | terminal )*
  *   label    := word | '"' … '"'   (+ optional _sub / ^sup)
@@ -168,11 +180,16 @@ export function parseLabel(raw: string): {
  * Bracketing is what tells a word from a node: content typed bare is a word
  * (`isWord`), anything in its own `[...]` is a node even when it ends up
  * childless. Same rule as jsSyntaxTree's VALUE vs NODE.
+ *
+ * Leniency is per tree and unchanged: a missing `]` auto-closes (so the
+ * document still builds while you type), and stray tokens *between* trees —
+ * a surplus `]`, a stray word — are skipped rather than failing the parse.
+ * Text before the first `[` is the one hard error, as it always was.
  */
-export function parse(input: string): ParseResult {
+export function parseAll(input: string): ParseAllResult {
   const trimmed = input.trim();
   if (trimmed.length === 0) {
-    return { tree: null, error: "Empty input" };
+    return { trees: [], error: "Empty input" };
   }
 
   const tokens = tokenize(trimmed);
@@ -245,10 +262,31 @@ export function parse(input: string): ParseResult {
     return node;
   }
 
-  const root = parseNode();
-  if (typeof root === "string") {
-    return { tree: null, error: root };
+  const trees: Tree[] = [];
+  while (pos < tokens.length) {
+    if (tokens[pos].type !== "open") {
+      // Junk between trees (a surplus ']' , a stray word): skip it. Before the
+      // first tree there's nothing to attach it to, so that's still an error.
+      if (trees.length === 0) return { trees: [], error: "Expected '['" };
+      pos++;
+      continue;
+    }
+    const root = parseNode();
+    if (typeof root === "string") {
+      return { trees: [], error: root };
+    }
+    trees.push(new Tree(root));
   }
-  // Any trailing tokens (stray ']' or extra input) are ignored leniently.
-  return { tree: new Tree(root), error: null };
+  if (trees.length === 0) return { trees: [], error: "Expected '['" };
+  return { trees, error: null };
+}
+
+/**
+ * Parse the **first** tree in a document. The single-tree convenience wrapper
+ * over {@link parseAll} — the app parses whole documents, but plenty of callers
+ * (and the round-trip tests) only care about one tree.
+ */
+export function parse(input: string): ParseResult {
+  const { trees, error } = parseAll(input);
+  return { tree: trees[0] ?? null, error };
 }

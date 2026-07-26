@@ -157,6 +157,7 @@ export function savePrefs() {
     leafAlignment: settings.leafAlignment,
     showNodeBoxes: settings.showNodeBoxes,
     autoSubscript: settings.autoSubscript,
+    forestLayout: settings.forestLayout,
   };
   try {
     localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
@@ -209,4 +210,6 @@ export function loadPrefs() {
     settings.showNodeBoxes = p.showNodeBoxes;
   if (typeof p.autoSubscript === "boolean")
     settings.autoSubscript = p.autoSubscript;
+  if (p.forestLayout === "row" || p.forestLayout === "column")
+    settings.forestLayout = p.forestLayout;
 }

@@ -10,6 +10,9 @@ A tree can be edited two ways that stay in sync:
 - **GUI**: click/keyboard/toolbar/drag on an SVG rendering.
 - **Text**: jsSyntaxTree-compatible labelled bracket notation in a side pane.
 
+A *document* (one tab) is a sequence of top-level bracket groups, so it can hold
+**several trees** — `[S …] [S …]` — all drawn on the same canvas.
+
 No framework, no runtime dependencies. Plain TypeScript compiled to ES modules,
 served as static files.
 
@@ -44,7 +47,8 @@ pnpm run watch  # rebuild + serve on change
   (`Deploy <short-sha>`), so rollback = check out that commit and deploy again.
   Deploy refuses a dirty `src/` (`ALLOW_DIRTY=1` overrides) — a build from
   uncommitted source can't be reproduced by that rebuild path.
-- `make test` runs the parser/serializer round-trip tests (`test/*.test.mjs`) on
+- `make test` runs the parser/serializer round-trip tests (`test/*.test.mjs`:
+  `roundtrip` for one tree, `multitree` for a whole document) on
   Node's built-in runner — no test dependency. They build first and import from
   `dist/`; `test/dom-stub.mjs` fakes the canvas that `tree.ts` measures text
   with, so the notation is testable without a browser. Import it **before** any
@@ -58,33 +62,41 @@ Pure model/logic modules with one controller wiring them to the DOM.
 | Module | Responsibility |
 | --- | --- |
 | `tree.ts` | `Node` / `Tree` model. Node = label + `subscript`/`superscript`/`triangle` + children. A node is either a **word** (`isWord`) or a labelled **node** — see the words-vs-nodes note below. Also width measurement and layout fields. |
-| `parser.ts` | Bracket notation → `Tree`. Own tokenizer (`[`/`]`/`_`/`^`/word/`"…"`); tolerant — auto-closes missing `]`, missing labels and unterminated quotes. `parseLabel` splits `NP_1^0` into base/sub/sup and shares that tokenizer. Bracketing is what marks a word: bare content is a word, `[...]` is a node. |
-| `serialize.ts` | `Tree` → bracket notation. Inverse of the parser: words go out bare, nodes keep their brackets (`[N]` even when childless), and a label/word is quoted only when it would otherwise be misread (see the quoting notes below), so ordinary documents stay bare. `serializePretty` (multi-line) exists but is **unused**. |
+| `parser.ts` | Bracket notation → trees. `parseAll` reads a whole **document** (every top-level bracket group) — that's what the app calls; `parse` is the single-tree wrapper returning the first. Own tokenizer (`[`/`]`/`_`/`^`/word/`"…"`); tolerant — auto-closes missing `]`, missing labels and unterminated quotes, and skips junk *between* trees. `parseLabel` splits `NP_1^0` into base/sub/sup and shares that tokenizer. Bracketing is what marks a word: bare content is a word, `[...]` is a node. |
+| `serialize.ts` | `Tree` → bracket notation. Inverse of the parser: words go out bare, nodes keep their brackets (`[N]` even when childless), and a label/word is quoted only when it would otherwise be misread (see the quoting notes below), so ordinary documents stay bare. `serializeAll` is the document form (one tree per line). `serializePretty` (multi-line) exists but is **unused**. |
 | `brackets.ts` | Pure, DOM-free helpers for the text pane: bracket matching (quote-aware — a `[` inside `"…"` is label text, not structure), matched-pair-at-caret detection, highlight-HTML building, and edit diff/position tracking. Unit-testable without a browser. |
-| `render.ts` | `Tree` → `<svg>`. Two passes (layout positions, then draw). Handles triangles, scripts, movement arrows, leaf alignment, bounding-box sizing. Tags each node group with `data-node-id`. |
+| `render.ts` | `Tree[]` → one `<svg>`. Two passes per tree (`layoutTree` positions, `drawTree` draws), then the boxes are composed onto one canvas — row or column per `settings.forestLayout`. Handles triangles, scripts, movement arrows, leaf alignment, bounding-box sizing. Tags each node group with `data-node-id`. |
 | `edit.ts` | Pure tree ops: add child/sibling (positional, each with a word-or-node choice), `toggleWordNode`, delete (promotes children), wrap, templates (X-bar, CP/TP, coordination), `linkNodes`/`nextSubscript` (movement-arrow tool), `applyAutoSubscripts` (auto-subscript display option), `reparent`, `isDescendant`. |
-| `export.ts` | Download SVG / PNG (SVG rasterized via canvas) / LaTeX `forest`, plus clipboard copy (PNG image, SVG markup, LaTeX). Always draws with the light palette — see the export-colors note below. |
+| `export.ts` | Download SVG / PNG (SVG rasterized via canvas) / LaTeX `forest`, plus clipboard copy (PNG image, SVG markup, LaTeX). Takes the whole document (`Tree[]`) — an image carries every tree as laid out, LaTeX emits one `forest` environment per tree. Always draws with the light palette — see the export-colors note below. |
 | `history.ts` | Undo/redo over document snapshots (bracket strings). One instance **per tab**. |
 | `tabs.ts` | `Workspace` model: an ordered list of named documents (`TabData` = id/name/text) + which is active. Pure model — no DOM, no history; add/remove/rename/switch and `toStored`/`fromStored`. |
 | `keymap.ts` | Single source of truth for keyboard shortcuts: the command list (id/label/default key/extra aliases), user remappings, canonical key encoding, and lookup. The help table and the remap UI are both rendered from it, so they can't drift. |
 | `persist.ts` | Autosave to localStorage + shareable URL fragment (`#t=`): the tab **workspace** (`saveWorkspace`/`loadWorkspace`, active doc mirrored to `#t=`), the theme, the display prefs (`savePrefs`/`loadPrefs`), and the keymap overrides (`saveKeymap`/`loadKeymap`). `loadDoc` remains to migrate a legacy single-doc save into a tab on boot; `saveDoc` is now **unused** (the workspace blob replaced it) and only kept as its counterpart. |
-| `settings.ts` | Layout/style constants, the three-way `leafAlignment`, theme colors. `THEME_COLORS` + `applyThemeColors` are the single source for the light/dark drawing palette (used by both the theme toggle and the exporters). |
+| `settings.ts` | Layout/style constants, the three-way `leafAlignment`, how several trees of one document are arranged (`forestLayout`/`forestGap`), theme colors. `THEME_COLORS` + `applyThemeColors` are the single source for the light/dark drawing palette (used by both the theme toggle and the exporters). |
 | `toolbar.ts` | Compact (small-screen) toolbar: builds the category chip strip from the toolbar's own `.group[data-cat]` elements and shows one group at a time. Owns the `body.compact-toolbar` switch. |
-| `app.ts` | Controller. Owns the `Tree` + `Workspace`, wires toolbar/keyboard/drag/text pane, tabs, zoom/pan, inline editing, theme. |
+| `app.ts` | Controller. Owns the document's `trees` (+ which is active) and the `Workspace`, wires toolbar/keyboard/drag/text pane, tabs, zoom/pan, inline editing, theme. |
 | `main.ts` | Entry point: `startApp()`. |
 
 ## Data flow (the important part)
 
-- **Text → tree**: `input` on the textarea → debounced `parse` → replace tree →
-  `renderTree()`. Does *not* write back to the textarea (avoids loops).
-- **Tree → everything**: after any GUI mutation, `mutated()` = serialize → push
-  history → save → set textarea value → render. Programmatic `textarea.value`
-  assignment doesn't fire `input`, so there's no feedback loop.
-- Selection is a single `tree.selectedNode`. Across a text re-parse **and across
-  undo/redo** it's restored by child-index path (`pathOf` / `nodeAtPath`). When
-  that exact path is gone (undo of an "add", a text edit that deleted it),
-  `nodeAtPath` returns the **deepest surviving ancestor** along the path rather
-  than the root, so undo leaves the selection where the user was working.
+- **Text → trees**: `input` on the textarea → debounced `parseAll` → replace the
+  document's trees → `renderTree()`. Does *not* write back to the textarea
+  (avoids loops).
+- **Trees → everything**: after any GUI mutation, `mutated()` = `serializeAll` →
+  push history → save → set textarea value → render. Programmatic
+  `textarea.value` assignment doesn't fire `input`, so there's no feedback loop.
+- Selection is a single node, and **exactly one tree carries it** — `selectNode`
+  clears every tree's `selectedNode` before setting one, and makes that node's
+  tree the active one (`tree` / `activeIndex`), so clicking into another tree of
+  the document just moves the selection there. The renderer draws whatever each
+  tree reports, so a stale `selectedNode` elsewhere would show as a second
+  highlighted node.
+- Across a text re-parse **and across undo/redo** the selection is restored by
+  `SelectionPath` = which tree + the child-index path within it (`pathOf` /
+  `nodeAtPath`). When that exact path is gone (undo of an "add", a text edit
+  that deleted it), `nodeAtPath` returns the **deepest surviving ancestor**
+  along the path rather than the root, so undo leaves the selection where the
+  user was working; a vanished *tree* index falls back to the last tree.
 
 ## Conventions & gotchas
 
@@ -220,8 +232,38 @@ Pure model/logic modules with one controller wiring them to the DOM.
     so the layout and the chip state can't disagree; the pre-existing 760px
     tweaks remain the no-JS fallback. Tapping the open chip closes the row (the
     choice persists via `saveToolbarCat`, where `""` means "collapsed").
+- **Several trees in one tab.** A document is a *sequence* of top-level bracket
+  groups, so `[S …] [S …]` is two trees, not a parse error, and the controller
+  holds `trees: Tree[]` with `tree` pointing at whichever one has the selection.
+  Nothing about a single tree changed — each is laid out independently and then
+  translated into its slot (`buildSVG` composes; `settings.forestLayout` picks
+  side-by-side or stacked, persisted with the other display prefs). The rules
+  that fall out of "the trees are independent":
+  - **Co-indexation is per tree.** `collectMovement` walks one root, so a shared
+    subscript across two trees draws nothing; Arrow mode refuses a cross-tree
+    pair with a toast rather than silently doing nothing.
+  - **A root isn't draggable.** Detaching it would leave its tree rootless.
+    (With one tree this was already impossible — every drop target was its own
+    descendant — so `updateDropTarget` now says so explicitly.) Dragging a
+    non-root *into* another tree is fine and moves the subtree across.
+  - **One tab stop for the whole canvas**, chosen across all trees in
+    `buildSVG` — otherwise every unselected tree's root would be tabbable. Each
+    tree gets a `<g role="group" aria-label="Tree n of m">` wrapper when there
+    are several; with one tree the wrapper is `role="none"`, which keeps the
+    node groups direct `treeitem`s of the enclosing `role="tree"` exactly as
+    before.
+  - **Exports cover the document**, not the active tree: one image with every
+    tree, one `forest` environment per tree in LaTeX.
+  - Keys: `Shift+T` adds a tree after the active one (`a` is "add word"),
+    `Shift+D` deletes it (refusing the last one; it's an ordinary edit, so
+    Ctrl+Z brings it back). On a **root**
+    — which has no siblings — `←`/`→` step to the previous/next tree and
+    `Shift+←`/`→` reorder them, mirroring sibling navigation one level down.
 - **Tabs** (`tabs.ts` + `#tabbar`): a `Workspace` holds several named documents;
-  only the active one is the live `Tree`. The controller keeps a `Map<tabId,
+  only the active one's trees are live. A tab is the unit of *naming, undo and
+  persistence*; a tree is one bracket group inside it (see the bullet above) —
+  so several related examples can share a tab and its history, or sit in
+  separate tabs with separate ones. The controller keeps a `Map<tabId,
   History>` so **undo is per-tab**, swapping `historyStack` on switch. Switching
   flushes the text pane into the active tab first (`flushActiveText`, only if it
   parses — matching the autosave rule that unparseable text is never saved). The
@@ -274,7 +316,8 @@ Robustness
       the whole document on every edit, so large trees mean multi-KB URLs
       rewritten per keystroke. Debounce it; consider compressing the payload.
 - [ ] Extend the test suite: `make test` covers parser/serializer round-trips
-      (`test/roundtrip.test.mjs`), but `edit.ts`, `brackets.ts`, `tabs.ts` and
+      for one tree (`test/roundtrip.test.mjs`) and for a multi-tree document
+      (`test/multitree.test.mjs`), but `edit.ts`, `brackets.ts`, `tabs.ts` and
       `keymap.ts` are all pure and untested, and there's no Playwright smoke test
       in-repo yet.
 

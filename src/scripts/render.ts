@@ -32,11 +32,26 @@ function attr(node: SVGElement, attrs: Record<string, string | number>) {
 }
 
 /**
- * Build an <svg> element for a tree. The SVG is sized to the tree's bounding
- * box (good for both on-screen display and export).
+ * One laid-out tree: node positions are written into the nodes themselves (in
+ * that tree's own coordinate space), and the box records what they add up to so
+ * several trees can be composed onto one canvas without re-measuring.
  */
-export function buildSVG(tree: Tree, opts: RenderOptions = {}): SVGSVGElement {
-  const margin = opts.margin ?? 24;
+interface TreeBox {
+  tree: Tree;
+  /** Content bounds in the tree's own coordinates (margins not included). */
+  minX: number;
+  maxX: number;
+  maxY: number;
+  /** Y of the terminal row — where movement arrows dip below. */
+  bottomRowY: number;
+  arrows: MovementPair[];
+  /** Size of the whole box, margins and movement-arrow room included. */
+  width: number;
+  height: number;
+}
+
+/** Pass 1 for a single tree: measure, position every node, and bound the result. */
+function layoutTree(tree: Tree, margin: number): TreeBox {
   const { height, verticalSpacing, horizontalSpacing } = settings.node;
 
   // Compute auto-subscripts (if enabled) before measuring, so their width is
@@ -52,7 +67,6 @@ export function buildSVG(tree: Tree, opts: RenderOptions = {}): SVGSVGElement {
 
   const rowDepth = alignmentDepths(tree, maxLeafDepth);
 
-  // --- Pass 1: assign positions ---------------------------------------
   const layout = (node: Node, centerX: number) => {
     node.x = centerX;
     node.y = topMargin + (rowDepth.get(node) ?? node.depth) * verticalSpacing;
@@ -68,7 +82,6 @@ export function buildSVG(tree: Tree, opts: RenderOptions = {}): SVGSVGElement {
   };
   layout(tree.root, margin + tree.root.width / 2);
 
-  // --- Compute bounding box -------------------------------------------
   let minX = Infinity,
     maxX = -Infinity,
     maxY = -Infinity;
@@ -80,31 +93,45 @@ export function buildSVG(tree: Tree, opts: RenderOptions = {}): SVGSVGElement {
   });
 
   // Reserve room beneath the tree for movement arrows.
-  const arrowGroups = collectMovement(tree);
-  const arrowRoom = arrowGroups.length > 0 ? 60 : 0;
+  const arrows = collectMovement(tree);
+  const arrowRoom = arrows.length > 0 ? 60 : 0;
 
-  const width = maxX - minX + margin * 2;
-  const totalHeight = maxY + margin + arrowRoom;
-  const viewMinX = minX - margin;
+  return {
+    tree,
+    minX,
+    maxX,
+    maxY,
+    bottomRowY,
+    arrows,
+    width: maxX - minX + margin * 2,
+    height: maxY + margin + arrowRoom,
+  };
+}
 
-  const svg = el("svg") as SVGSVGElement;
-  attr(svg, {
-    xmlns: SVG_NS,
-    viewBox: `${viewMinX} 0 ${width} ${totalHeight}`,
-    width,
-    height: totalHeight,
-  });
-  svg.style.display = "block";
-  svg.style.maxWidth = "none";
-  // Expose the tree to assistive tech. Node groups (drawn below) are treeitems
-  // owned directly by this role="tree" element; the drawing layers are purely
-  // decorative and hidden from the accessibility tree.
-  attr(svg, {
-    role: "tree",
-    "aria-label": "Syntax tree — Tab to enter, arrow keys to navigate",
-  });
-
-  defineArrowhead(svg);
+/**
+ * Pass 2 for a single tree: draw it into a `<g>` shifted to `(offsetX, offsetY)`
+ * on the shared canvas. The tree's own coordinates are untouched — only the
+ * group's transform places it — so hit-testing, drag targets and the inline
+ * editor keep working off `getBoundingClientRect` as before.
+ *
+ * `groupLabel` names the tree for assistive tech when a document holds more
+ * than one. With a single tree the wrapper is `role="none"`, which drops it
+ * from the accessibility tree and leaves the node groups as direct treeitems of
+ * the enclosing `role="tree"`, exactly as before trees could be composed.
+ */
+function drawTree(
+  box: TreeBox,
+  opts: RenderOptions,
+  offsetX: number,
+  offsetY: number,
+  groupLabel: string | null,
+  tabStop: Node | null
+): SVGElement {
+  const { tree } = box;
+  const g = el("g");
+  attr(g, { transform: `translate(${offsetX}, ${offsetY})` });
+  if (groupLabel) attr(g, { role: "group", "aria-label": groupLabel });
+  else attr(g, { role: "none" });
 
   const edgesG = el("g");
   const trianglesG = el("g");
@@ -112,11 +139,10 @@ export function buildSVG(tree: Tree, opts: RenderOptions = {}): SVGSVGElement {
   attr(edgesG, { "aria-hidden": "true" });
   attr(trianglesG, { "aria-hidden": "true" });
   attr(arrowsG, { "aria-hidden": "true" });
-  svg.appendChild(edgesG);
-  svg.appendChild(trianglesG);
-  svg.appendChild(arrowsG);
+  g.appendChild(edgesG);
+  g.appendChild(trianglesG);
+  g.appendChild(arrowsG);
 
-  // --- Pass 2: draw ----------------------------------------------------
   tree.root.walk((node) => {
     node.children.forEach((child) => {
       if (child.isWord && child.triangle) {
@@ -127,11 +153,73 @@ export function buildSVG(tree: Tree, opts: RenderOptions = {}): SVGSVGElement {
     });
   });
 
-  // Append node groups directly to the <svg> so each treeitem is a direct
-  // child of role="tree"; drawn last so labels sit on top of the edges.
-  tree.root.walk((node) => drawLabel(svg, tree, node, opts));
+  // Node groups are drawn last so labels sit on top of the edges.
+  tree.root.walk((node) => drawLabel(g, tree, node, opts, tabStop));
 
-  drawMovementArrows(arrowsG, arrowGroups, bottomRowY, height);
+  drawMovementArrows(arrowsG, box.arrows, box.bottomRowY, settings.node.height);
+  return g;
+}
+
+/**
+ * Build an <svg> element for a document's trees. The SVG is sized to their
+ * combined bounding box (good for both on-screen display and export).
+ *
+ * Several trees are laid out side by side, or stacked, per
+ * `settings.forestLayout`; each is measured on its own and then translated into
+ * place, so one tree's shape never perturbs another's layout.
+ */
+export function buildSVG(trees: Tree[], opts: RenderOptions = {}): SVGSVGElement {
+  const margin = opts.margin ?? 24;
+  const gap = settings.forestGap;
+  const column = settings.forestLayout === "column";
+  const boxes = trees.map((t) => layoutTree(t, margin));
+
+  // Place each box along the main axis, tracking the extent of the other one.
+  let cursor = 0;
+  let cross = 0;
+  const offsets = boxes.map((b) => {
+    const at = cursor;
+    cursor += (column ? b.height : b.width) + gap;
+    cross = Math.max(cross, column ? b.width : b.height);
+    return at;
+  });
+  const main = Math.max(cursor - (boxes.length > 0 ? gap : 0), 1);
+  const width = Math.max(column ? cross : main, 1);
+  const totalHeight = Math.max(column ? main : cross, 1);
+
+  const svg = el("svg") as SVGSVGElement;
+  attr(svg, {
+    xmlns: SVG_NS,
+    viewBox: `0 0 ${width} ${totalHeight}`,
+    width,
+    height: totalHeight,
+  });
+  svg.style.display = "block";
+  svg.style.maxWidth = "none";
+  // Expose the tree(s) to assistive tech. Node groups are treeitems owned by
+  // this role="tree" element (through a per-tree group when there are several);
+  // the drawing layers are purely decorative and hidden from the a11y tree.
+  attr(svg, {
+    role: "tree",
+    "aria-label":
+      (trees.length > 1 ? `${trees.length} syntax trees` : "Syntax tree") +
+      " — Tab to enter, arrow keys to navigate",
+  });
+
+  defineArrowhead(svg);
+
+  // One tab stop for the whole canvas: the selection (only ever in one tree),
+  // else the first tree's root.
+  const selected = trees.find((t) => t.selectedNode)?.selectedNode ?? null;
+  const tabStop = selected ?? trees[0]?.root ?? null;
+
+  boxes.forEach((b, i) => {
+    // Shift the box's left/top edge (content bound minus its margin) to its slot.
+    const x = (column ? 0 : offsets[i]) - (b.minX - margin);
+    const y = column ? offsets[i] : 0;
+    const label = boxes.length > 1 ? `Tree ${i + 1} of ${boxes.length}` : null;
+    svg.appendChild(drawTree(b, opts, x, y, label, tabStop));
+  });
 
   return svg;
 }
@@ -235,7 +323,13 @@ function nodeAriaLabel(node: Node): string {
   return s;
 }
 
-function drawLabel(g: SVGElement, tree: Tree, node: Node, opts: RenderOptions) {
+function drawLabel(
+  g: SVGElement,
+  tree: Tree,
+  node: Node,
+  opts: RenderOptions,
+  tabStop: Node | null
+) {
   // `isSelected` is the model's truth (drives ARIA + the roving tabindex);
   // `selected` is whether to *draw* it, which an export turns off.
   const isSelected = tree.selectedNode === node;
@@ -257,13 +351,12 @@ function drawLabel(g: SVGElement, tree: Tree, node: Node, opts: RenderOptions) {
 
   if (opts.interactive) {
     group.style.cursor = "pointer";
-    // Roving tabindex: exactly one node is in the tab order — the selected one,
-    // or the root when nothing is selected — so Tab reaches the tree once and
-    // arrow keys take over from there.
-    const isTabStop = tree.selectedNode
-      ? isSelected
-      : node === tree.root;
-    group.setAttribute("tabindex", isTabStop ? "0" : "-1");
+    // Roving tabindex: exactly one node in the whole canvas is in the tab order
+    // — the selected one, or the first tree's root when nothing is selected —
+    // so Tab reaches the trees once and arrow keys take over from there. The
+    // tab stop is chosen across all trees (see `buildSVG`), or a document with
+    // three trees would offer three tab stops.
+    group.setAttribute("tabindex", node === tabStop ? "0" : "-1");
   }
 
   // A per-node color override (Settings panel) tints the label and, when node
@@ -441,14 +534,14 @@ function defineArrowhead(svg: SVGSVGElement) {
   svg.appendChild(defs);
 }
 
-/** Render a tree into a container element, wiring up click selection. */
+/** Render a document's trees into a container element, wiring click selection. */
 export function render(
-  tree: Tree,
+  trees: Tree[],
   container: HTMLElement,
   onNodeClick: (node: Node, evt: MouseEvent) => void
 ): SVGSVGElement {
   container.innerHTML = "";
-  const svg = buildSVG(tree, { interactive: true, onNodeClick });
+  const svg = buildSVG(trees, { interactive: true, onNodeClick });
   container.appendChild(svg);
   return svg;
 }

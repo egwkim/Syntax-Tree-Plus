@@ -31,6 +31,7 @@
         <button data-action="text" title="Add child word — a lexical item or symbol (a)">+ Text</button>
         <button data-action="sib-before" title="Add sibling before (Shift+S)">+ Sib ◀</button>
         <button data-action="sib-after" title="Add sibling after (s)">+ Sib ▶</button>
+        <button data-action="add-tree" title="Add another tree to this tab (Shift+T)">+ Tree</button>
       </div>
 
       <div class="group" data-cat="edit" data-cat-label="Edit" data-cat-icon="✎">
@@ -39,6 +40,7 @@
         <button data-action="triangle" title="Toggle triangle (t)">△ Triangle</button>
         <button data-action="wrap" title="Wrap in new parent (w)">Wrap</button>
         <button data-action="delete" title="Delete node (Del)">Delete</button>
+        <button data-action="delete-tree" title="Delete the selected tree (Shift+D)">Del Tree</button>
       </div>
 
       <div class="group" data-cat="clipboard" data-cat-label="Clipboard" data-cat-icon="✂">
@@ -124,6 +126,10 @@
         <h3>Notation</h3>
         <ul class="notation">
           <li><code>[S [NP the cat] [VP slept]]</code> — brackets nest structure.</li>
+          <li>
+            Write <strong>several trees</strong> one after another —
+            <code>[S …] [S …]</code> — and they're all drawn on the canvas.
+          </li>
           <li>Unclosed brackets are auto-closed as you type.</li>
           <li>Select text and press <code>[</code> to wrap it in brackets.</li>
           <li>
@@ -201,9 +207,23 @@
         <h3>Trees &amp; view</h3>
         <ul class="notation">
           <li>
-            <strong>Tabs:</strong> the bar under the toolbar holds multiple named
-            trees. <strong>+</strong> adds one, double-click a tab to rename it,
-            and <strong>×</strong> closes it. Each tab keeps its own undo history.
+            <strong>Several trees in one tab:</strong> a tab holds a whole
+            document, so it can carry more than one tree — useful for a set of
+            examples that belong together, or a before/after pair.
+            <strong>+ Tree</strong> (<code>Shift+T</code>) adds one after the selected
+            tree, <strong>Del Tree</strong> (<code>Shift+D</code>) removes it
+            (undoable), and on a <em>root</em> node <code>←</code> /
+            <code>→</code> step between trees while
+            <code>Shift</code>+<code>←</code>/<code>→</code> reorder them. Every
+            edit command applies to the tree you have selected; exports cover
+            all of them. Choose side-by-side or stacked layout in
+            <strong>⚙ Settings</strong>.
+          </li>
+          <li>
+            <strong>Tabs:</strong> the bar under the toolbar holds several named
+            documents. <strong>+</strong> adds one, double-click a tab to rename
+            it, and <strong>×</strong> closes it. Each tab keeps its own undo
+            history.
           </li>
           <li>
             <strong>On a phone:</strong> the toolbar collapses to a row of
@@ -261,12 +281,22 @@
           <label for="setting-auto-subscript">Auto-subscript</label>
           <input type="checkbox" id="setting-auto-subscript" />
 
+          <label for="setting-forest-layout">Multiple trees</label>
+          <select id="setting-forest-layout">
+            <option value="row">Side by side</option>
+            <option value="column">Stacked</option>
+          </select>
+
           <label for="setting-node-color">Node color</label>
           <div class="setting-color-row">
             <input type="color" id="setting-node-color" />
             <button type="button" data-action="reset-node-color">Reset</button>
           </div>
         </div>
+        <p class="tip">
+          <strong>Multiple trees</strong> chooses how the trees of one tab are
+          arranged on the canvas — left to right, or one under another.
+        </p>
         <p class="tip">
           <strong>Auto-subscript</strong> numbers repeated non-terminal node
           labels (NP → NP₁, NP₂) for display only — it isn't written into the

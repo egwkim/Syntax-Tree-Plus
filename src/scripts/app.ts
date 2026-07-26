@@ -1,8 +1,8 @@
 import { Tree, Node } from "./tree.js";
 import { render } from "./render.js";
 import { settings, applyThemeColors, LeafAlignment } from "./settings.js";
-import { parse, parseLabel } from "./parser.js";
-import { serialize } from "./serialize.js";
+import { parseAll, parseLabel } from "./parser.js";
+import { serializeAll } from "./serialize.js";
 import { History } from "./history.js";
 import { Workspace } from "./tabs.js";
 import { setupCompactToolbar } from "./toolbar.js";
@@ -82,6 +82,7 @@ export function startApp() {
   const edgeStyleSelect = document.getElementById("setting-edge-style") as HTMLSelectElement;
   const autoSubscriptInput = document.getElementById("setting-auto-subscript") as HTMLInputElement;
   const nodeColorInput = document.getElementById("setting-node-color") as HTMLInputElement;
+  const forestLayoutSelect = document.getElementById("setting-forest-layout") as HTMLSelectElement;
   const colorHint = document.getElementById("settings-color-hint") as HTMLElement;
   const treePane = document.getElementById("tree-pane") as HTMLElement;
   const tabbar = document.getElementById("tabbar") as HTMLElement;
@@ -89,6 +90,12 @@ export function startApp() {
   const helpKeys = document.getElementById("help-keys") as HTMLElement;
   const shortcutList = document.getElementById("shortcut-list") as HTMLElement;
 
+  // A tab's document holds one *or more* trees (`[S …] [S …]`). They're all
+  // drawn on the same canvas; `tree` is whichever one holds the selection —
+  // every edit command still works on exactly one tree, so most of the
+  // controller is unchanged by there being others beside it.
+  let trees: Tree[] = [];
+  let activeIndex = 0;
   let tree!: Tree;
   const workspace = new Workspace();
   // One undo/redo history per tab, so switching tabs keeps each doc's history.
@@ -111,31 +118,70 @@ export function startApp() {
 
   function getNodeById(id: number): Node | null {
     let found: Node | null = null;
-    tree.root.walk((n) => {
-      if (n.id === id) found = n;
-    });
+    for (const t of trees) {
+      t.root.walk((n) => {
+        if (n.id === id) found = n;
+      });
+    }
     return found;
   }
 
-  /** Path of child indices from the root to a node (for selection restore). */
-  function pathOf(node: Node): number[] {
+  /** The tree a node belongs to (its own, falling back to the active one). */
+  function treeOf(node: Node): Tree {
+    return node.tree ?? tree;
+  }
+
+  /** Make the i-th tree of the document the active one (index clamped). */
+  function setActiveIndex(i: number) {
+    activeIndex = Math.max(0, Math.min(i, trees.length - 1));
+    tree = trees[activeIndex];
+  }
+
+  /**
+   * Move the selection to `node` (or clear it), making that node's tree active.
+   * Exactly one tree ever carries a selection — the renderer draws whatever
+   * each tree reports, so a stale `selectedNode` on another tree would show up
+   * as a second highlighted node.
+   */
+  function selectNode(node: Node | null) {
+    for (const t of trees) t.selectedNode = null;
+    if (!node) return;
+    const idx = trees.indexOf(treeOf(node));
+    if (idx >= 0) setActiveIndex(idx);
+    tree.selectedNode = node;
+  }
+
+  /**
+   * Where a node sits in the document: which tree, then the child-index path
+   * down to it. Used to restore the selection across a re-parse or an undo.
+   */
+  interface SelectionPath {
+    tree: number;
+    path: number[];
+  }
+
+  function pathOf(node: Node): SelectionPath {
     const path: number[] = [];
-    let n: Node | null = node;
-    while (n && n.parent) {
+    let n: Node = node;
+    while (n.parent) {
       path.unshift(n.parent.children.indexOf(n));
       n = n.parent;
     }
-    return path;
+    const idx = trees.indexOf(treeOf(n));
+    return { tree: idx >= 0 ? idx : activeIndex, path };
   }
+
   /**
-   * Node at a child-index path — or, if that branch no longer exists (undo of
-   * an "add", a text edit that removed it), the deepest ancestor along the path
-   * that does. Falling back to the nearest ancestor keeps the selection where
-   * the user was working instead of throwing them back to the root.
+   * Node at a selection path in `list` — or, if that branch no longer exists
+   * (undo of an "add", a text edit that removed it), the deepest ancestor along
+   * the path that does. Falling back to the nearest ancestor keeps the
+   * selection where the user was working instead of throwing them back to the
+   * root. A vanished *tree* falls back to the last one, for the same reason.
    */
-  function nodeAtPath(t: Tree, path: number[]): Node {
+  function nodeAtPath(list: Tree[], sel: SelectionPath): Node {
+    const t = list[Math.max(0, Math.min(sel.tree, list.length - 1))];
     let n: Node = t.root;
-    for (const idx of path) {
+    for (const idx of sel.path) {
       const child = n.children[idx];
       if (!child) break;
       n = child;
@@ -143,13 +189,15 @@ export function startApp() {
     return n;
   }
 
-  function setTree(newTree: Tree, keepSelectionPath?: number[]) {
-    tree = newTree;
-    if (keepSelectionPath) {
-      tree.selectedNode = nodeAtPath(tree, keepSelectionPath);
-    } else if (!tree.selectedNode) {
-      tree.selectedNode = tree.root;
-    }
+  /**
+   * Replace the document's trees. `keep` restores the selection by path;
+   * without it the first tree's root is selected (callers that want no
+   * selection at all clear it afterwards).
+   */
+  function setTrees(list: Tree[], keep?: SelectionPath) {
+    trees = list.length > 0 ? list : [new Tree()];
+    setActiveIndex(keep ? keep.tree : activeIndex);
+    selectNode(keep ? nodeAtPath(trees, keep) : tree.root);
   }
 
   /** Is DOM focus currently on a node inside the tree SVG? */
@@ -179,12 +227,13 @@ export function startApp() {
     // The SVG is rebuilt from scratch, which drops focus; if the user was
     // navigating with the keyboard, put focus back on the selected node.
     const refocus = treeHasFocus();
-    const svg = render(tree, container, (node) => {
+    const svg = render(trees, container, (node) => {
       if (linkMode) {
         handleLinkClick(node);
         return;
       }
-      tree.selectedNode = node;
+      // Clicking into another tree of the document makes that tree active.
+      selectNode(node);
       navigationHistory.length = 0;
       renderTree();
     });
@@ -316,7 +365,7 @@ export function startApp() {
   function handleLinkClick(node: Node) {
     if (!linkSource) {
       linkSource = node;
-      tree.selectedNode = node;
+      selectNode(node);
       renderTree();
       flashStatus(`Arrow from "${node.label || "∅"}" — click the target node`);
       return;
@@ -327,8 +376,15 @@ export function startApp() {
       flashStatus("Cancelled");
       return;
     }
-    linkNodes(tree, linkSource, node);
-    tree.selectedNode = node;
+    // Movement is derived from co-indexation *within* a tree (see render.ts),
+    // so a shared subscript across two trees would draw nothing. Keep waiting
+    // for a target in the source's own tree rather than silently doing nothing.
+    if (treeOf(node) !== treeOf(linkSource)) {
+      flashStatus("A movement arrow links two nodes of the same tree");
+      return;
+    }
+    linkNodes(treeOf(linkSource), linkSource, node);
+    selectNode(node);
     linkSource = null;
     mutated();
     flashStatus("Linked with a movement arrow");
@@ -352,7 +408,7 @@ export function startApp() {
 
   /** Push current state to history + persist. Optionally refresh text pane. */
   function commit(updateText = true) {
-    const text = serialize(tree);
+    const text = serializeAll(trees);
     historyStack.push(text);
     persistActive(text);
     if (updateText) {
@@ -374,15 +430,15 @@ export function startApp() {
     window.clearTimeout(debounceTimer);
     debounceTimer = window.setTimeout(() => {
       const raw = textInput.value;
-      const { tree: parsed, error } = parse(raw);
-      if (error || !parsed) {
+      const { trees: parsed, error } = parseAll(raw);
+      if (error || parsed.length === 0) {
         parseError.textContent = "⚠ " + (error ?? "Could not parse");
         parseError.classList.add("visible");
         return;
       }
       parseError.classList.remove("visible");
-      const path = tree ? pathOf(tree.selectedNode ?? tree.root) : [];
-      setTree(parsed, path);
+      const path = trees.length > 0 ? pathOf(tree.selectedNode ?? tree.root) : undefined;
+      setTrees(parsed, path);
       historyStack.push(raw.trim());
       persistActive(raw);
       renderTree();
@@ -577,7 +633,7 @@ export function startApp() {
       if (node.isLeaf && node.label.trim() === "" && node.parent) {
         const parent = node.parent;
         parent.removeChild(node);
-        tree.selectedNode = parent;
+        selectNode(parent);
         changed = true;
       }
 
@@ -618,7 +674,7 @@ export function startApp() {
     if (!group) return;
     const found = getNodeById(Number(group.getAttribute("data-node-id")));
     if (found) {
-      tree.selectedNode = found;
+      selectNode(found);
       renderTree();
       startInlineEdit(found);
     }
@@ -640,7 +696,7 @@ export function startApp() {
       changed = true;
     }
     if (tree.selectedNode) {
-      tree.selectedNode = null;
+      selectNode(null);
       navigationHistory.length = 0;
       changed = true;
     }
@@ -651,7 +707,7 @@ export function startApp() {
 
   function insertAndEdit(node: Node | null) {
     if (!node) return;
-    tree.selectedNode = node;
+    selectNode(node);
     // Render (so the inline editor can be positioned) but don't commit to
     // history/text yet — the node is still blank. finish() commits, or the
     // blank-node cleanup discards it if left empty.
@@ -692,7 +748,7 @@ export function startApp() {
       clipboard = cloneNodeSubtree(sel);
       const parent = sel.parent;
       parent.removeChild(sel);
-      tree.selectedNode = parent;
+      selectNode(parent);
       mutated();
     },
     paste() {
@@ -700,7 +756,7 @@ export function startApp() {
       if (!clipboard || !sel) return;
       const pasted = cloneNodeSubtree(clipboard);
       sel.insertChild(pasted);
-      tree.selectedNode = pasted;
+      selectNode(pasted);
       mutated();
     },
     "paste-before"() {
@@ -709,7 +765,7 @@ export function startApp() {
       const pasted = cloneNodeSubtree(clipboard);
       const idx = sel.parent.children.indexOf(sel);
       sel.parent.insertChild(pasted, idx);
-      tree.selectedNode = pasted;
+      selectNode(pasted);
       mutated();
     },
     "paste-after"() {
@@ -718,7 +774,7 @@ export function startApp() {
       const pasted = cloneNodeSubtree(clipboard);
       const idx = sel.parent.children.indexOf(sel);
       sel.parent.insertChild(pasted, idx + 1);
-      tree.selectedNode = pasted;
+      selectNode(pasted);
       mutated();
     },
     "toggle-drag"() {
@@ -742,8 +798,8 @@ export function startApp() {
     wrap() {
       const sel = tree.selectedNode;
       if (!sel) return;
-      const parent = wrapNode(tree, sel, "X");
-      tree.selectedNode = parent;
+      const parent = wrapNode(treeOf(sel), sel, "X");
+      selectNode(parent);
       mutated();
       startInlineEdit(parent);
     },
@@ -770,29 +826,29 @@ export function startApp() {
     delete() {
       const sel = tree.selectedNode;
       if (!sel) return;
-      const next = deleteNode(tree, sel);
-      tree.selectedNode = next;
+      const next = deleteNode(treeOf(sel), sel);
+      selectNode(next);
       mutated();
     },
     xbar() {
       const sel = tree.selectedNode;
       if (!sel) return;
-      const head = xbarTemplate(tree, sel);
-      tree.selectedNode = head;
+      const head = xbarTemplate(treeOf(sel), sel);
+      selectNode(head);
       mutated();
     },
     cptp() {
       const sel = tree.selectedNode;
       if (!sel) return;
-      const head = cpTpTemplate(tree, sel);
-      tree.selectedNode = head;
+      const head = cpTpTemplate(treeOf(sel), sel);
+      selectNode(head);
       mutated();
     },
     coordination() {
       const sel = tree.selectedNode;
       if (!sel) return;
-      const target = coordinationTemplate(tree, sel);
-      tree.selectedNode = target;
+      const target = coordinationTemplate(treeOf(sel), sel);
+      selectNode(target);
       mutated();
     },
     undo() {
@@ -803,21 +859,23 @@ export function startApp() {
       const state = historyStack.redo();
       if (state !== null) restoreFromHistory(state);
     },
-    "export-svg": () => exportSVG(tree),
-    "export-png": () => exportPNG(tree),
-    "export-latex": () => exportLaTeX(tree),
+    // Exports cover the whole document — every tree in the tab, laid out the
+    // way the canvas shows them.
+    "export-svg": () => exportSVG(trees),
+    "export-png": () => exportPNG(trees),
+    "export-latex": () => exportLaTeX(trees),
     "copy-png-image": () => {
-      copyImagePNG(tree)
+      copyImagePNG(trees)
         .then(() => flashStatus("Copied image"))
         .catch((err: Error) => alert(err.message || "Couldn't copy the image."));
     },
     "copy-svg-markup": () => {
-      copySVGMarkup(tree)
+      copySVGMarkup(trees)
         .then(() => flashStatus("Copied SVG"))
         .catch((err: Error) => alert(err.message || "Couldn't copy the SVG."));
     },
     "copy-latex": () => {
-      copyLaTeX(tree)
+      copyLaTeX(trees)
         .then(() => flashStatus("Copied LaTeX"))
         .catch((err: Error) => alert(err.message || "Couldn't copy the LaTeX."));
     },
@@ -866,6 +924,32 @@ export function startApp() {
         mutated();
       }
     },
+    /** Add another tree to this tab's document, right after the active one. */
+    "add-tree"() {
+      const added = new Tree(new Node("S"));
+      trees.splice(activeIndex + 1, 0, added);
+      setActiveIndex(activeIndex + 1);
+      selectNode(added.root);
+      mutated();
+      startInlineEdit(added.root);
+    },
+    /**
+     * Drop the selected tree from the document. Like closing a tab it refuses
+     * to leave nothing behind, but unlike closing a tab it's just an edit — the
+     * snapshot in history covers every tree, so Ctrl+Z brings it back.
+     */
+    "delete-tree"() {
+      if (trees.length <= 1) {
+        flashStatus("A tab keeps at least one tree");
+        return;
+      }
+      const removed = activeIndex;
+      trees.splice(removed, 1);
+      setActiveIndex(Math.min(removed, trees.length - 1));
+      selectNode(tree.root);
+      mutated();
+      flashStatus("Tree deleted — Ctrl+Z to undo");
+    },
     "zoom-in": () => zoomBy(1.2),
     "zoom-out": () => zoomBy(1 / 1.2),
     "zoom-reset": () => resetZoom(),
@@ -887,6 +971,7 @@ export function startApp() {
     vSpacingInput.value = String(settings.node.verticalSpacing);
     edgeStyleSelect.value = settings.edge.style;
     autoSubscriptInput.checked = settings.autoSubscript;
+    forestLayoutSelect.value = settings.forestLayout;
 
     const sel = tree?.selectedNode;
     nodeColorInput.disabled = !sel;
@@ -933,6 +1018,11 @@ export function startApp() {
     savePrefs();
     renderTree();
   });
+  forestLayoutSelect.addEventListener("change", () => {
+    settings.forestLayout = forestLayoutSelect.value === "column" ? "column" : "row";
+    savePrefs();
+    renderTree();
+  });
   nodeColorInput.addEventListener("input", () => {
     if (tree.selectedNode) {
       tree.selectedNode.color = nodeColorInput.value;
@@ -941,13 +1031,13 @@ export function startApp() {
   });
 
   function restoreFromHistory(state: string) {
-    const { tree: parsed } = parse(state);
-    if (!parsed) return;
+    const { trees: parsed } = parseAll(state);
+    if (parsed.length === 0) return;
     // Keep the selection across undo/redo by child-index path, the same way a
     // text re-parse does — otherwise every undo throws the user back to the root.
     const path = tree?.selectedNode ? pathOf(tree.selectedNode) : null;
-    setTree(parsed, path ?? undefined);
-    if (!path) tree.selectedNode = null; // nothing was selected — keep it that way
+    setTrees(parsed, path ?? undefined);
+    if (!path) selectNode(null); // nothing was selected — keep it that way
     persistActive(state);
     textInput.value = state;
     afterProgrammaticValue();
@@ -1073,14 +1163,16 @@ export function startApp() {
     if (dragging && dropTarget) {
       const moved = reparent(dragSource, dropTarget, dropIndex);
       if (moved) {
-        tree.selectedNode = dragSource;
+        // A drop into another tree of the document moves the subtree there;
+        // `selectNode` follows it, so the active tree tracks the node.
+        selectNode(dragSource);
         cleanupDrag(false);
         mutated();
         return;
       }
     }
     // Plain tap in drag mode (no movement) still selects the node.
-    if (!dragging && dragSource) tree.selectedNode = dragSource;
+    if (!dragging && dragSource) selectNode(dragSource);
     cleanupDrag(true);
   });
 
@@ -1091,7 +1183,15 @@ export function startApp() {
       ? getNodeById(Number(group.getAttribute("data-node-id")))
       : null;
 
-    if (!target || !dragSource || isDescendant(dragSource, target)) {
+    // A tree's root has no parent to detach from — dropping it into another
+    // tree would leave its own tree rootless, so roots aren't draggable. (With
+    // one tree this was already impossible: every target was its descendant.)
+    if (
+      !target ||
+      !dragSource ||
+      !dragSource.parent ||
+      isDescendant(dragSource, target)
+    ) {
       dropTarget = null;
       hideDropIndicators();
       return;
@@ -1246,7 +1346,7 @@ export function startApp() {
         : null;
       if (adopted) {
         e.preventDefault();
-        tree.selectedNode = adopted;
+        selectNode(adopted);
         renderTree();
       }
       return;
@@ -1261,7 +1361,7 @@ export function startApp() {
         case "ArrowUp":
           if (node.parent) {
             navigationHistory.push(node.parent.children.indexOf(node));
-            tree.selectedNode = node.parent;
+            selectNode(node.parent);
             renderTree();
           }
           break;
@@ -1272,34 +1372,52 @@ export function startApp() {
               idx = navigationHistory.pop()!;
               if (idx >= node.children.length) idx = 0;
             }
-            tree.selectedNode = node.children[idx];
+            selectNode(node.children[idx]);
             renderTree();
           }
           break;
         case "ArrowLeft":
-        case "ArrowRight":
+        case "ArrowRight": {
+          const dir = e.key === "ArrowLeft" ? -1 : 1;
           if (node.parent) {
             const sibs = node.parent.children;
             const idx = sibs.indexOf(node);
             if (e.shiftKey) {
               // Shift+arrow reorders siblings.
-              if (moveSibling(node, e.key === "ArrowLeft" ? -1 : 1)) mutated();
+              if (moveSibling(node, dir)) mutated();
             } else {
-              const t = e.key === "ArrowLeft" ? idx - 1 : idx + 1;
+              const t = idx + dir;
               if (t >= 0 && t < sibs.length) {
-                tree.selectedNode = sibs[t];
+                selectNode(sibs[t]);
                 navigationHistory.length = 0;
                 renderTree();
               }
             }
+          } else {
+            // A root has no siblings; its neighbours are the document's other
+            // trees, so the same keys step between them — and Shift reorders
+            // them, exactly as it reorders siblings one level down.
+            const to = activeIndex + dir;
+            if (to < 0 || to >= trees.length) break;
+            if (e.shiftKey) {
+              const [moved] = trees.splice(activeIndex, 1);
+              trees.splice(to, 0, moved);
+              setActiveIndex(to);
+              mutated();
+            } else {
+              selectNode(trees[to].root);
+              navigationHistory.length = 0;
+              renderTree();
+            }
           }
           break;
+        }
       }
       return;
     }
     if (e.key === "Escape") {
       if (tree.selectedNode) {
-        tree.selectedNode = null;
+        selectNode(null);
         navigationHistory.length = 0;
         renderTree();
       }
@@ -1334,13 +1452,19 @@ export function startApp() {
     return h;
   }
 
-  /** Load the active tab into the live tree + text pane + its own history. */
+  /** Load the active tab into the live trees + text pane + its own history. */
   function loadActiveTab() {
     const tab = workspace.active;
     historyStack = ensureHistory(tab.id, tab.text);
-    const { tree: parsed, error } = parse(tab.text);
-    setTree(parsed && !error ? parsed : tree ?? parse(DEFAULT_DOC).tree!);
-    tree.selectedNode = tree.root;
+    const { trees: parsed, error } = parseAll(tab.text);
+    const loaded =
+      parsed.length > 0 && !error
+        ? parsed
+        : trees.length > 0
+        ? trees
+        : parseAll(DEFAULT_DOC).trees;
+    // A freshly opened tab starts on its first tree, root selected.
+    setTrees(loaded, { tree: 0, path: [] });
     textInput.value = tab.text;
     afterProgrammaticValue();
     if (error) {
@@ -1355,8 +1479,8 @@ export function startApp() {
 
   /** Persist the text pane's current content into the active tab if it parses. */
   function flushActiveText() {
-    const { tree: parsed, error } = parse(textInput.value);
-    if (parsed && !error) persistActive(textInput.value);
+    const { trees: parsed, error } = parseAll(textInput.value);
+    if (parsed.length > 0 && !error) persistActive(textInput.value);
   }
 
   function switchTab(id: string) {
@@ -1614,10 +1738,13 @@ export function startApp() {
     workspace.activeId = restored.activeId;
   } else {
     const legacy = loadDoc();
-    workspace.add(legacy && parse(legacy).tree ? legacy : DEFAULT_DOC, "Tree 1");
+    workspace.add(
+      legacy && parseAll(legacy).trees.length > 0 ? legacy : DEFAULT_DOC,
+      "Tree 1"
+    );
   }
   const shared = fragmentDoc();
-  if (shared && parse(shared).tree) workspace.active.text = shared;
+  if (shared && parseAll(shared).trees.length > 0) workspace.active.text = shared;
 
   loadActiveTab();
   saveWorkspace(workspace.toStored());

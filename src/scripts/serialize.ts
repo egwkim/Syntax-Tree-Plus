@@ -97,6 +97,18 @@ export function serialize(tree: Tree): string {
   return serializeNode(tree.root);
 }
 
+/**
+ * Serialize a whole document — every tree in a tab — back to bracket notation.
+ *
+ * One tree per line: a newline is plain whitespace to the tokenizer, so the
+ * separator is purely cosmetic, but it keeps a multi-tree document readable in
+ * the text pane and makes each tree a line you can select. Inverse of
+ * {@link parseAll}.
+ */
+export function serializeAll(trees: Tree[], separator = "\n"): string {
+  return trees.map(serialize).join(separator);
+}
+
 /** Pretty-print a tree across multiple indented lines (nice for the text pane). */
 export function serializePretty(tree: Tree, indent: string = "  "): string {
   const build = (node: Node, depth: number, standalone: boolean): string => {

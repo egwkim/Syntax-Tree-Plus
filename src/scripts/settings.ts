@@ -10,6 +10,8 @@
 export type LeafAlignment = "top" | "words" | "bottom";
 export type EdgeStyle = "straight" | "curved";
 export type ThemeName = "light" | "dark";
+/** How several trees in one document are arranged on the canvas. */
+export type ForestLayout = "row" | "column";
 
 export const settings = {
   node: {
@@ -51,6 +53,12 @@ export const settings = {
   // Auto-number repeated node labels with subscripts (NP → NP₁, NP₂, …).
   // Purely a display option (jsSyntaxTree parity) — see `applyAutoSubscripts`.
   autoSubscript: false,
+  // A tab's document can hold several trees: lay them out left-to-right
+  // ("row") or one under another ("column"). Purely how they're composed onto
+  // the canvas — each tree is still laid out independently.
+  forestLayout: "row" as ForestLayout,
+  // Blank space between two trees of the same document.
+  forestGap: 56,
 };
 
 export type Settings = typeof settings;

@@ -39,6 +39,10 @@ export const COMMANDS: CommandDef[] = [
   { id: "cptp", label: "Expand to CP/TP clause skeleton", defaultKey: "Shift+b", category: "Structure" },
   { id: "delete", label: "Delete node (children reattach)", defaultKey: "d", extraKeys: ["Delete", "Backspace"], category: "Structure" },
   { id: "reverse", label: "Reverse sibling order", defaultKey: "r", category: "Structure" },
+  // Tree-level commands: `a` is taken by "add word", so the mnemonic key is
+  // Shift+T ("Tree"), with Shift+D pairing with `d` one level down.
+  { id: "add-tree", label: "Add another tree to this tab", defaultKey: "Shift+t", category: "Structure" },
+  { id: "delete-tree", label: "Delete the selected tree", defaultKey: "Shift+d", category: "Structure" },
 
   // Clipboard
   { id: "copy", label: "Copy subtree", defaultKey: "c", category: "Clipboard" },
@@ -57,7 +61,8 @@ export const COMMANDS: CommandDef[] = [
  *  not remappable — they'd collide with core navigation semantics). */
 export const FIXED_KEYS: { keys: string; label: string; category: string }[] = [
   { keys: "Arrow keys", label: "Move selection (parent / child / sibling)", category: "Navigation" },
-  { keys: "Shift + ← / →", label: "Reorder siblings", category: "Navigation" },
+  { keys: "← / → on a root", label: "Move to the previous / next tree of the tab", category: "Navigation" },
+  { keys: "Shift + ← / →", label: "Reorder siblings (on a root: reorder trees)", category: "Navigation" },
   { keys: "Ctrl+Z / Ctrl+Y", label: "Undo / redo", category: "Navigation" },
   { keys: "Esc", label: "Deselect / cancel (or click empty space)", category: "Navigation" },
 ];
