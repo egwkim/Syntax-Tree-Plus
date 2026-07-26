@@ -13,16 +13,24 @@ let nextNodeId = 1;
 /**
  * A single node in a syntax tree.
  *
- * A node is either an internal (labelled) node such as `NP`, `VP`, `S`, or a
- * terminal (a word / span of words). Terminals are simply leaf nodes whose
- * label is the word(s). A terminal spanning multiple words is drawn with a
- * triangle (jsSyntaxTree convention).
+ * A node is either a **labelled node** such as `NP`, `VP`, `S`, or a **word**
+ * (a terminal: one word or a span of words). The two are distinct even when
+ * both are childless — `[NP [N]]` is a bare category `N` with nothing under it,
+ * while `[N cat]` is `N` over the word `cat`. That's jsSyntaxTree's NODE/VALUE
+ * split, and it's carried by the notation itself (brackets or not), so unlike
+ * `color` it survives a text round-trip and undo/redo.
+ *
+ * A word spanning multiple words is drawn with a triangle (jsSyntaxTree
+ * convention).
  */
 export class Node {
   label!: string;
   subscript: string = "";
   superscript: string = "";
   triangle: boolean = false;
+  /** Raw NODE/VALUE flag; read through `isWord`, which also enforces the
+   *  childless invariant. */
+  private word: boolean = false;
   /** Optional per-node text color override, set via the Settings panel. Not
    *  part of the bracket notation — like `id`, it's session-only and doesn't
    *  survive a text-pane re-parse. */
@@ -56,8 +64,25 @@ export class Node {
     }
   }
 
+  /** Structurally childless — says nothing about word-vs-node. */
   get isLeaf(): boolean {
     return this.children.length === 0;
+  }
+
+  /**
+   * Is this a word (jsSyntaxTree's VALUE) rather than a labelled node?
+   *
+   * The childless test is part of the getter on purpose: jsSyntaxTree's VALUE
+   * can never have children, and `serialize` would have to drop any that a word
+   * somehow acquired (via drag-reparenting, say). Deriving it here makes that
+   * state unrepresentable instead of merely discouraged.
+   */
+  get isWord(): boolean {
+    return this.word && this.children.length === 0;
+  }
+
+  set isWord(value: boolean) {
+    this.word = value;
   }
 
   insertChild(child: Node, idx: number = -1) {
@@ -132,6 +157,7 @@ export class Node {
     copy.subscript = this.subscript;
     copy.superscript = this.superscript;
     copy.triangle = this.triangle;
+    copy.isWord = this.isWord;
     copy.color = this.color;
     copy.updateTextWidth();
     this.children.forEach((child) => copy.insertChild(child.clone()));

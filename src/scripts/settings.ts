@@ -1,4 +1,13 @@
-export type LeafAlignment = "node" | "leaf";
+/**
+ * Vertical placement of nodes, mirroring jsSyntaxTree's three alignment modes:
+ *
+ * - `top`    — every node sits at its own depth (ALIGN_TOP).
+ * - `words`  — words drop to a common bottom row; nodes (including childless
+ *              ones like `[N]`) stay at their depth (ALIGN_LEAVES).
+ * - `bottom` — leaves drop to the bottom row and every parent is pushed down to
+ *              just above its highest child (ALIGN_BOTTOM).
+ */
+export type LeafAlignment = "top" | "words" | "bottom";
 export type EdgeStyle = "straight" | "curved";
 export type ThemeName = "light" | "dark";
 
@@ -35,9 +44,8 @@ export const settings = {
     selected: "#cce6ff",
     selectedStroke: "#0b4fa8",
   },
-  // Terminal words aligned to a common bottom row ("leaf") or drawn at their
-  // own depth ("node").
-  leafAlignment: "leaf" as LeafAlignment,
+  // Vertical alignment mode — see LeafAlignment.
+  leafAlignment: "words" as LeafAlignment,
   // Draw a border box around every node label.
   showNodeBoxes: false,
   // Auto-number repeated node labels with subscripts (NP → NP₁, NP₂, …).

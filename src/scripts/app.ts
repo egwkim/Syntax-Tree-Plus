@@ -1,6 +1,6 @@
 import { Tree, Node } from "./tree.js";
 import { render } from "./render.js";
-import { settings, applyThemeColors } from "./settings.js";
+import { settings, applyThemeColors, LeafAlignment } from "./settings.js";
 import { parse, parseLabel } from "./parser.js";
 import { serialize } from "./serialize.js";
 import { History } from "./history.js";
@@ -59,6 +59,7 @@ import {
   cpTpTemplate,
   coordinationTemplate,
   toggleTriangle,
+  toggleWordNode,
   isDescendant,
   reparent,
   linkNodes,
@@ -565,7 +566,7 @@ export function startApp() {
         node.subscript = sub;
         node.superscript = sup;
         // Multi-word terminal becomes a triangle automatically.
-        if (node.isLeaf && base.indexOf(" ") >= 0) node.triangle = true;
+        if (node.isWord && base.indexOf(" ") >= 0) node.triangle = true;
         node.updateTextWidth();
         changed = true;
       }
@@ -667,6 +668,10 @@ export function startApp() {
       const sel = tree.selectedNode;
       if (sel) insertAndEdit(addChildAt(sel, 0));
     },
+    text() {
+      const sel = tree.selectedNode;
+      if (sel) insertAndEdit(addChildAt(sel, sel.children.length, "", true));
+    },
     "sib-before"() {
       const sel = tree.selectedNode;
       if (sel) insertAndEdit(addSiblingBefore(sel));
@@ -747,10 +752,20 @@ export function startApp() {
     },
     triangle() {
       const sel = tree.selectedNode;
-      if (sel && sel.isLeaf) {
+      if (sel && sel.isWord) {
         toggleTriangle(sel);
         mutated();
       }
+    },
+    "toggle-word"() {
+      const sel = tree.selectedNode;
+      if (!sel) return;
+      if (!toggleWordNode(sel)) {
+        flashStatus("Only a leaf can be a word");
+        return;
+      }
+      flashStatus(sel.isWord ? "Word" : "Node");
+      mutated();
     },
     delete() {
       const sel = tree.selectedNode;
@@ -807,7 +822,12 @@ export function startApp() {
         .catch((err: Error) => alert(err.message || "Couldn't copy the LaTeX."));
     },
     "toggle-align"() {
-      settings.leafAlignment = settings.leafAlignment === "leaf" ? "node" : "leaf";
+      // Cycle the three jsSyntaxTree alignment modes.
+      const order: LeafAlignment[] = ["top", "words", "bottom"];
+      const names = { top: "Top aligned", words: "Words at bottom", bottom: "Bottom aligned" };
+      const next = order[(order.indexOf(settings.leafAlignment) + 1) % order.length];
+      settings.leafAlignment = next;
+      flashStatus(names[next]);
       savePrefs();
       renderTree();
     },

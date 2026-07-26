@@ -43,18 +43,18 @@ Pure model/logic modules with one controller wiring them to the DOM.
 
 | Module | Responsibility |
 | --- | --- |
-| `tree.ts` | `Node` / `Tree` model. Node = label + `subscript`/`superscript`/`triangle` + children. A terminal is a childless node whose label is the word(s). Also width measurement and layout fields. |
-| `parser.ts` | Bracket notation → `Tree`. Own tokenizer (`[`/`]`/`_`/`^`/word/`"…"`); tolerant — auto-closes missing `]`, missing labels and unterminated quotes. `parseLabel` splits `NP_1^0` into base/sub/sup and shares that tokenizer. |
-| `serialize.ts` | `Tree` → bracket notation. Inverse of the parser: quotes a label/terminal only when it would otherwise be misread (see the quoting notes below), so ordinary documents stay bare. `serializePretty` (multi-line) exists but is **unused**. |
+| `tree.ts` | `Node` / `Tree` model. Node = label + `subscript`/`superscript`/`triangle` + children. A node is either a **word** (`isWord`) or a labelled **node** — see the words-vs-nodes note below. Also width measurement and layout fields. |
+| `parser.ts` | Bracket notation → `Tree`. Own tokenizer (`[`/`]`/`_`/`^`/word/`"…"`); tolerant — auto-closes missing `]`, missing labels and unterminated quotes. `parseLabel` splits `NP_1^0` into base/sub/sup and shares that tokenizer. Bracketing is what marks a word: bare content is a word, `[...]` is a node. |
+| `serialize.ts` | `Tree` → bracket notation. Inverse of the parser: words go out bare, nodes keep their brackets (`[N]` even when childless), and a label/word is quoted only when it would otherwise be misread (see the quoting notes below), so ordinary documents stay bare. `serializePretty` (multi-line) exists but is **unused**. |
 | `brackets.ts` | Pure, DOM-free helpers for the text pane: bracket matching (quote-aware — a `[` inside `"…"` is label text, not structure), matched-pair-at-caret detection, highlight-HTML building, and edit diff/position tracking. Unit-testable without a browser. |
 | `render.ts` | `Tree` → `<svg>`. Two passes (layout positions, then draw). Handles triangles, scripts, movement arrows, leaf alignment, bounding-box sizing. Tags each node group with `data-node-id`. |
-| `edit.ts` | Pure tree ops: add child/sibling (positional), delete (promotes children), wrap, templates (X-bar, CP/TP, coordination), `linkNodes`/`nextSubscript` (movement-arrow tool), `applyAutoSubscripts` (auto-subscript display option), `reparent`, `isDescendant`. |
+| `edit.ts` | Pure tree ops: add child/sibling (positional, each with a word-or-node choice), `toggleWordNode`, delete (promotes children), wrap, templates (X-bar, CP/TP, coordination), `linkNodes`/`nextSubscript` (movement-arrow tool), `applyAutoSubscripts` (auto-subscript display option), `reparent`, `isDescendant`. |
 | `export.ts` | Download SVG / PNG (SVG rasterized via canvas) / LaTeX `forest`, plus clipboard copy (PNG image, SVG markup, LaTeX). Always draws with the light palette — see the export-colors note below. |
 | `history.ts` | Undo/redo over document snapshots (bracket strings). One instance **per tab**. |
 | `tabs.ts` | `Workspace` model: an ordered list of named documents (`TabData` = id/name/text) + which is active. Pure model — no DOM, no history; add/remove/rename/switch and `toStored`/`fromStored`. |
 | `keymap.ts` | Single source of truth for keyboard shortcuts: the command list (id/label/default key/extra aliases), user remappings, canonical key encoding, and lookup. The help table and the remap UI are both rendered from it, so they can't drift. |
 | `persist.ts` | Autosave to localStorage + shareable URL fragment (`#t=`): the tab **workspace** (`saveWorkspace`/`loadWorkspace`, active doc mirrored to `#t=`), the theme, the display prefs (`savePrefs`/`loadPrefs`), and the keymap overrides (`saveKeymap`/`loadKeymap`). `loadDoc` remains to migrate a legacy single-doc save into a tab on boot; `saveDoc` is now **unused** (the workspace blob replaced it) and only kept as its counterpart. |
-| `settings.ts` | Layout/style constants, leaf alignment, theme colors. `THEME_COLORS` + `applyThemeColors` are the single source for the light/dark drawing palette (used by both the theme toggle and the exporters). |
+| `settings.ts` | Layout/style constants, the three-way `leafAlignment`, theme colors. `THEME_COLORS` + `applyThemeColors` are the single source for the light/dark drawing palette (used by both the theme toggle and the exporters). |
 | `toolbar.ts` | Compact (small-screen) toolbar: builds the category chip strip from the toolbar's own `.group[data-cat]` elements and shows one group at a time. Owns the `body.compact-toolbar` switch. |
 | `app.ts` | Controller. Owns the `Tree` + `Workspace`, wires toolbar/keyboard/drag/text pane, tabs, zoom/pan, inline editing, theme. |
 | `main.ts` | Entry point: `startApp()`. |
@@ -84,6 +84,28 @@ Pure model/logic modules with one controller wiring them to the DOM.
 - **Movement arrows** are derived, not drawn explicitly: two nodes sharing a
   subscript are linked when one is a trace (`t`, `t*`, `e`). No column-number
   arrow syntax.
+- **Words vs nodes** (`Node.isWord`, jsSyntaxTree's VALUE vs NODE). A leaf is not
+  automatically a word: `[N cat]` is `N` over the **word** `cat`, while `[NP [N]]`
+  is a childless **node** — a bare category, or a symbol slot the user hasn't
+  filled. **Bracketing is the spelling**, so unlike per-node `color` the
+  distinction lives in the notation and survives a text round-trip and undo/redo.
+  What it drives: italics (words only), triangles (words only), `words`-mode
+  alignment, auto-subscript (nodes only), and the `\textit{}` in the LaTeX export.
+  `isWord` is a *derived* getter — it also requires the node be childless, so a
+  word that acquires children (drag-reparenting) silently becomes a node instead
+  of serializing to something that would drop the subtree. The toolbar exposes it
+  three ways: **+ Child** makes a node, **+ Text** makes a word, and
+  **Word/Node** (`Shift+W`, `toggleWordNode`) flips a leaf. A new sibling
+  inherits the kind of the node it's added beside.
+- **Alignment has three modes** (`settings.leafAlignment`, cycled by ⇅ Align),
+  ported from jsSyntaxTree: `top` (every node at its own depth), `words` (words
+  drop to a common bottom row, nodes stay put — so a `[N]` sits with the
+  structure, not the lexicon), and `bottom` (every leaf on the bottom row, each
+  parent pushed to just above its highest child). `alignmentDepths` in `render.ts`
+  computes the rows. One deliberate divergence: jsSyntaxTree's `moveParentsDown`
+  takes a minimum over an empty child list, so a childless node lands at
+  `Infinity` and disappears in its bottom mode; ours puts every leaf on the
+  bottom row.
 - **Triangles / terminal spans**: a multi-word terminal auto-triangles. Scripts
   bind to the **whole run**, not its last word — `[NP the big cat_1]` is the span
   "the big cat" with subscript 1, so a triangle can carry a movement index. This
@@ -100,13 +122,15 @@ Pure model/logic modules with one controller wiring them to the DOM.
   than emit text that wouldn't parse back.
 - **Adjacent terminals are quoted.** Consecutive *bare* terminals serialize to one
   space-separated run and would merge into a single span on re-parse, so
-  `serializeNode` quotes a leaf that has a leaf neighbour: `[NP "the" "cat"]`,
+  `serializeNode` quotes a word that has a *word* neighbour: `[NP "the" "cat"]`,
   `[NP "the big" "old cat"]`. A quoted value is never joined into a neighbouring
   run (jsSyntaxTree's `parseValue` accumulates only unquoted tokens), which is
   what makes two adjacent spans expressible — the last arrangement that wasn't.
   A lone terminal keeps the readable bare spelling, so ordinary documents acquire
-  no quotes at all. The bracketed spelling (`[NP [the] [cat]]`) still parses; it's
-  just not what we emit.
+  no quotes at all. Only *words* can merge, so a node neighbour needs no quoting
+  (`[NP the [N]]`). The bracketed spelling `[NP [the] [cat]]` is a different tree
+  — two childless nodes — and now round-trips as itself rather than being
+  rewritten into quoted words.
   Because nothing is lossy any more, the **round-trip warning banner is retired**:
   `#round-trip-warning` is an empty, permanently hidden slot and
   `updateRoundTripWarning` only clears it. Reuse or delete both if no other
@@ -121,9 +145,10 @@ Pure model/logic modules with one controller wiring them to the DOM.
   notation — it's lost on any edit that re-parses the whole tree from text.
 - **Auto-subscript** (`settings.autoSubscript`) writes to a *transient*
   `Node.autoSubscript` field, recomputed on every `buildSVG` by
-  `applyAutoSubscripts`. Only non-terminal (internal) nodes are numbered —
-  terminals (words) are excluded, since repeated words are common and
-  numbering them would be noise, not signal. It's never serialized and never
+  `applyAutoSubscripts`. Only nodes are numbered — **words** are excluded, since
+  repeated words are common and numbering them would be noise, not signal. A
+  childless node (`[N]`) is still a node and does get numbered, matching
+  jsSyntaxTree's `assignSubscripts`. It's never serialized and never
   fed to `collectMovement`, so it can't pollute the notation or draw arrows.
   Render/measure/export read `Node.displaySubscript()` (manual `subscript`
   wins over `autoSubscript`); the real `subscript` is what serialize, movement

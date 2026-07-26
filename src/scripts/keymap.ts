@@ -26,13 +26,15 @@ export interface CommandDef {
 
 export const COMMANDS: CommandDef[] = [
   // Structure
-  { id: "child", label: "Add child at end", defaultKey: "n", category: "Structure" },
-  { id: "child-start", label: "Add child at start", defaultKey: "Shift+n", category: "Structure" },
+  { id: "child", label: "Add child node at end", defaultKey: "n", category: "Structure" },
+  { id: "child-start", label: "Add child node at start", defaultKey: "Shift+n", category: "Structure" },
+  { id: "text", label: "Add child word (text)", defaultKey: "a", category: "Structure" },
+  { id: "toggle-word", label: "Toggle leaf: word / node", defaultKey: "Shift+w", category: "Structure" },
   { id: "sib-after", label: "Add sibling after", defaultKey: "s", category: "Structure" },
   { id: "sib-before", label: "Add sibling before", defaultKey: "Shift+s", category: "Structure" },
   { id: "wrap", label: "Wrap in new parent", defaultKey: "w", category: "Structure" },
   { id: "rename", label: "Rename (inline)", defaultKey: "e", extraKeys: ["Enter", "F2"], category: "Structure" },
-  { id: "triangle", label: "Toggle triangle on a terminal", defaultKey: "t", category: "Structure" },
+  { id: "triangle", label: "Toggle triangle on a word", defaultKey: "t", category: "Structure" },
   { id: "xbar", label: "Expand to X-bar skeleton", defaultKey: "b", category: "Structure" },
   { id: "cptp", label: "Expand to CP/TP clause skeleton", defaultKey: "Shift+b", category: "Structure" },
   { id: "delete", label: "Delete node (children reattach)", defaultKey: "d", extraKeys: ["Delete", "Backspace"], category: "Structure" },

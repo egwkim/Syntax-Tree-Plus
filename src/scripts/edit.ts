@@ -5,31 +5,59 @@ export function cloneNodeSubtree(node: Node): Node {
   return node.clone();
 }
 
-/** Add a new empty child under `node` at `index` (-1 = append). */
-export function addChildAt(node: Node, index: number, label = ""): Node {
+/**
+ * Add a new empty child under `node` at `index` (-1 = append).
+ *
+ * `isWord` picks which kind is created — a word (a lexical item, serialized
+ * bare) or a labelled node (serialized in its own brackets, `[N]`, even while
+ * childless). The caller always decides: the toolbar has a button for each.
+ */
+export function addChildAt(
+  node: Node,
+  index: number,
+  label = "",
+  isWord = false
+): Node {
   const child = new Node(label);
+  child.isWord = isWord;
   node.insertChild(child, index);
   return child;
 }
 
 /** Add a new empty child at the end of `node`'s children. */
-export function addChild(node: Node, label = ""): Node {
-  return addChildAt(node, -1, label);
+export function addChild(node: Node, label = "", isWord = false): Node {
+  return addChildAt(node, -1, label, isWord);
 }
 
-/** Add a sibling immediately after `node`. Root has no siblings. */
-export function addSiblingAfter(node: Node, label = ""): Node | null {
+/**
+ * Add a sibling immediately after `node`. Root has no siblings.
+ *
+ * A sibling defaults to the same kind as the node it's added next to — the
+ * predictable choice, since siblings in a real tree are usually alike (two
+ * category nodes, or two words under one mother).
+ */
+export function addSiblingAfter(
+  node: Node,
+  label = "",
+  isWord = node.isWord
+): Node | null {
   if (!node.parent) return null;
   const sibling = new Node(label);
+  sibling.isWord = isWord;
   const idx = node.parent.children.indexOf(node);
   node.parent.insertChild(sibling, idx + 1);
   return sibling;
 }
 
 /** Add a sibling immediately before `node`. Root has no siblings. */
-export function addSiblingBefore(node: Node, label = ""): Node | null {
+export function addSiblingBefore(
+  node: Node,
+  label = "",
+  isWord = node.isWord
+): Node | null {
   if (!node.parent) return null;
   const sibling = new Node(label);
+  sibling.isWord = isWord;
   const idx = node.parent.children.indexOf(node);
   node.parent.insertChild(sibling, idx);
   return sibling;
@@ -178,7 +206,11 @@ export function coordinationTemplate(tree: Tree, node: Node): Node {
   [...node.children].forEach((c) => node.removeChild(c));
 
   const first = new Node(category);
+  // The coordinator is the one slot in these templates meant to be renamed to
+  // an actual lexical item ("and" / "or"), so it starts life as a word. The
+  // category skeletons around it (Spec, X', heads) stay nodes.
   const conj = new Node("&");
+  conj.isWord = true;
   const second = new Node(category);
 
   node.insertChild(first);
@@ -187,17 +219,34 @@ export function coordinationTemplate(tree: Tree, node: Node): Node {
   return conj;
 }
 
-/** Toggle the triangle flag on a leaf terminal. */
+/** Toggle the triangle flag on a word. Nodes never carry a triangle. */
 export function toggleTriangle(node: Node): void {
-  if (node.isLeaf) node.triangle = !node.triangle;
+  if (node.isWord) node.triangle = !node.triangle;
+}
+
+/**
+ * Switch a leaf between a word and a labelled node — the manual override for
+ * the case the notation can't guess: a leaf that holds a symbol (`Ø`, `t`, a
+ * bare category) rather than a lexical item.
+ *
+ * Only leaves can change: a node with children is a node by definition. A node
+ * turned into a word loses its triangle, which is a property of a word *span*
+ * and would otherwise linger invisibly. Returns whether anything changed.
+ */
+export function toggleWordNode(node: Node): boolean {
+  if (!node.isLeaf) return false;
+  node.isWord = !node.isWord;
+  if (!node.isWord) node.triangle = false;
+  return true;
 }
 
 /**
  * Auto-subscript display option (jsSyntaxTree parity): number repeated
- * non-terminal node labels so otherwise-identical phrase/bar nodes are
- * distinguishable (NP → NP₁, NP₂, …). Terminals (leaves — words) are excluded:
- * repeated words are common and meaningful on their own, so numbering them
- * would be noisy rather than helpful.
+ * node labels so otherwise-identical phrase/bar nodes are distinguishable
+ * (NP → NP₁, NP₂, …). Words are excluded: repeated words are common and
+ * meaningful on their own, so numbering them would be noisy rather than
+ * helpful. A childless *node* (`[N]`) is still a node and does get numbered,
+ * matching jsSyntaxTree's `assignSubscripts`.
  *
  * Writes only to the transient `autoSubscript` field — never to `subscript` —
  * so it can't leak into the bracket notation on serialize or spawn a spurious
@@ -214,7 +263,7 @@ export function applyAutoSubscripts(tree: Tree, enabled: boolean): void {
 
   const groups = new Map<string, Node[]>();
   tree.root.walk((n) => {
-    if (n.isLeaf) return; // terminals aren't numbered
+    if (n.isWord) return; // words aren't numbered
     if (n.subscript) return; // respect an explicit subscript
     const label = n.label.trim();
     if (!label) return;

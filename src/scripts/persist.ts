@@ -1,4 +1,4 @@
-import { settings } from "./settings.js";
+import { settings, LeafAlignment } from "./settings.js";
 import type { StoredWorkspace } from "./tabs.js";
 
 const STORAGE_KEY = "syntax-tree-plus:doc";
@@ -194,8 +194,17 @@ export function loadPrefs() {
     settings.node.verticalSpacing = p.verticalSpacing;
   if (p.edgeStyle === "straight" || p.edgeStyle === "curved")
     settings.edge.style = p.edgeStyle;
-  if (p.leafAlignment === "leaf" || p.leafAlignment === "node")
-    settings.leafAlignment = p.leafAlignment;
+  // Alignment used to be a two-way switch; migrate the old spellings so a
+  // returning user keeps the mode they picked.
+  const ALIGNMENTS: Record<string, LeafAlignment> = {
+    top: "top",
+    words: "words",
+    bottom: "bottom",
+    node: "top", // legacy: "draw each node at its own depth"
+    leaf: "words", // legacy: "drop terminals to a common bottom row"
+  };
+  if (typeof p.leafAlignment === "string" && p.leafAlignment in ALIGNMENTS)
+    settings.leafAlignment = ALIGNMENTS[p.leafAlignment];
   if (typeof p.showNodeBoxes === "boolean")
     settings.showNodeBoxes = p.showNodeBoxes;
   if (typeof p.autoSubscript === "boolean")

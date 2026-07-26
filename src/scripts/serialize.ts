@@ -57,35 +57,43 @@ function terminalToken(node: Node, standalone: boolean): string {
   return (quote ? quoted(label) : label) + scriptSuffix(node);
 }
 
-/** Does the child at `i` sit next to another terminal? */
-function hasLeafNeighbour(children: Node[], i: number): boolean {
+/**
+ * Does the child at `i` sit next to another **word**?
+ *
+ * Only words can merge on re-parse. A childless *node* neighbour is already
+ * self-delimiting — its brackets end the run — so `[NP the [N]]` needs no
+ * quotes on `the`.
+ */
+function hasWordNeighbour(children: Node[], i: number): boolean {
   return (
-    (i > 0 && children[i - 1].isLeaf) ||
-    (i + 1 < children.length && children[i + 1].isLeaf)
+    (i > 0 && children[i - 1].isWord) ||
+    (i + 1 < children.length && children[i + 1].isWord)
   );
 }
 
 /**
  * Serialize a node to labelled bracket notation.
  *
- * Terminal (leaf) children are emitted as bare text; labelled children are
- * wrapped in their own brackets. This is the inverse of {@link parse}.
+ * Word children are emitted as bare text; node children are wrapped in their
+ * own brackets — including when they have no children of their own, which is
+ * exactly what keeps a symbol (`[N]`) distinct from a word (`cat`) across a
+ * round-trip. This is the inverse of {@link parse}.
  */
 export function serializeNode(node: Node): string {
-  if (node.isLeaf) return labelToken(node);
+  if (node.isWord) return terminalToken(node, false);
 
   const parts = node.children.map((child, i) =>
-    child.isLeaf
-      ? terminalToken(child, hasLeafNeighbour(node.children, i))
+    child.isWord
+      ? terminalToken(child, hasWordNeighbour(node.children, i))
       : serializeNode(child)
   );
 
+  // A childless node still needs its brackets — a bare label doesn't parse.
+  if (parts.length === 0) return `[${labelToken(node)}]`;
   return `[${labelToken(node)} ${parts.join(" ")}]`;
 }
 
 export function serialize(tree: Tree): string {
-  // A childless root still needs its brackets — a bare label doesn't parse.
-  if (tree.root.isLeaf) return `[${labelToken(tree.root)}]`;
   return serializeNode(tree.root);
 }
 
@@ -93,18 +101,18 @@ export function serialize(tree: Tree): string {
 export function serializePretty(tree: Tree, indent: string = "  "): string {
   const build = (node: Node, depth: number, standalone: boolean): string => {
     const pad = indent.repeat(depth);
-    if (node.isLeaf) {
+    if (node.isWord) {
       return pad + terminalToken(node, standalone);
     }
-    // Collapse a node whose children are all terminals onto one line.
-    const allLeaves = node.children.every((c) => c.isLeaf);
-    if (allLeaves) {
+    // Collapse a node whose children are all leaves (or that has none) onto
+    // one line.
+    if (node.children.every((c) => c.isLeaf)) {
       return pad + serializeNode(node);
     }
     // A newline is just whitespace to the parser, so adjacent terminals still
     // need to be self-delimiting even on separate lines.
     const inner = node.children
-      .map((c, i) => build(c, depth + 1, hasLeafNeighbour(node.children, i)))
+      .map((c, i) => build(c, depth + 1, hasWordNeighbour(node.children, i)))
       .join("\n");
     return `${pad}[${labelToken(node)}\n${inner}\n${pad}]`;
   };

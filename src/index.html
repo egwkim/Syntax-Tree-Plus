@@ -27,13 +27,15 @@
       </div>
 
       <div class="group" data-cat="insert" data-cat-label="Insert" data-cat-icon="＋">
-        <button data-action="child" title="Add child at end (n)">+ Child</button>
+        <button data-action="child" title="Add child node — a category label, kept as [X] (n)">+ Child</button>
+        <button data-action="text" title="Add child word — a lexical item or symbol (a)">+ Text</button>
         <button data-action="sib-before" title="Add sibling before (Shift+S)">+ Sib ◀</button>
         <button data-action="sib-after" title="Add sibling after (s)">+ Sib ▶</button>
       </div>
 
       <div class="group" data-cat="edit" data-cat-label="Edit" data-cat-icon="✎">
         <button data-action="rename" title="Rename node (e / Enter)">Rename</button>
+        <button data-action="toggle-word" title="Toggle the selected leaf between a word and a node (Shift+W)">↔ Word/Node</button>
         <button data-action="triangle" title="Toggle triangle (t)">△ Triangle</button>
         <button data-action="wrap" title="Wrap in new parent (w)">Wrap</button>
         <button data-action="delete" title="Delete node (Del)">Delete</button>
@@ -63,7 +65,7 @@
         <button data-action="zoom-reset" title="Reset zoom to 100% (0)"><span id="zoom-label">100%</span></button>
         <button data-action="zoom-in" title="Zoom in (+)">＋</button>
         <button data-action="zoom-fit" title="Fit tree to view (f)">⤢ Fit</button>
-        <button data-action="toggle-align" title="Toggle leaf alignment">⇅ Align</button>
+        <button data-action="toggle-align" title="Cycle alignment: top / words at bottom / bottom">⇅ Align</button>
         <button data-action="toggle-boxes" title="Toggle node boxes">□ Boxes</button>
         <button data-action="toggle-theme" title="Toggle dark mode">◐ Theme</button>
       </div>
@@ -124,6 +126,14 @@
           <li><code>[S [NP the cat] [VP slept]]</code> — brackets nest structure.</li>
           <li>Unclosed brackets are auto-closed as you type.</li>
           <li>Select text and press <code>[</code> to wrap it in brackets.</li>
+          <li>
+            <code>[N cat]</code> is <code>N</code> over the <strong>word</strong>
+            <em>cat</em> (italic); <code>[NP [N]]</code> is a bare
+            <strong>node</strong> — a category or symbol with nothing under it.
+            Brackets are what tell them apart, so use <strong>+ Text</strong> for
+            a word, <strong>+ Child</strong> for a node, or
+            <strong>Word/Node</strong> to flip a leaf.
+          </li>
           <li><code>[NP the big cat]</code> — a multi-word terminal draws a <strong>triangle</strong>.</li>
           <li><code>NP_1</code> — <code>_</code> adds a <strong>subscript</strong> (co-index).</li>
           <li><code>X^0</code> — <code>^</code> adds a <strong>superscript</strong>.</li>

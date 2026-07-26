@@ -50,13 +50,12 @@ export function buildSVG(tree: Tree, opts: RenderOptions = {}): SVGSVGElement {
   const maxLeafDepth = tree.maxLeafDepth();
   const bottomRowY = topMargin + maxLeafDepth * verticalSpacing;
 
+  const rowDepth = alignmentDepths(tree, maxLeafDepth);
+
   // --- Pass 1: assign positions ---------------------------------------
   const layout = (node: Node, centerX: number) => {
     node.x = centerX;
-    node.y =
-      settings.leafAlignment === "leaf" && node.isLeaf
-        ? bottomRowY
-        : topMargin + node.depth * verticalSpacing;
+    node.y = topMargin + (rowDepth.get(node) ?? node.depth) * verticalSpacing;
 
     if (node.children.length > 0) {
       let childX = centerX - node.width / 2;
@@ -120,7 +119,7 @@ export function buildSVG(tree: Tree, opts: RenderOptions = {}): SVGSVGElement {
   // --- Pass 2: draw ----------------------------------------------------
   tree.root.walk((node) => {
     node.children.forEach((child) => {
-      if (child.isLeaf && child.triangle) {
+      if (child.isWord && child.triangle) {
         drawTriangle(trianglesG, node, child);
       } else {
         drawEdge(edgesG, node, child);
@@ -135,6 +134,47 @@ export function buildSVG(tree: Tree, opts: RenderOptions = {}): SVGSVGElement {
   drawMovementArrows(arrowsG, arrowGroups, bottomRowY, height);
 
   return svg;
+}
+
+/**
+ * The row each node is drawn on under the current alignment mode — a port of
+ * jsSyntaxTree's `moveLeafsToBottom` / `moveParentsDown`. An absent entry means
+ * "stay at `node.depth`", so `top` needs no entries at all.
+ *
+ * `words` moves only words, which is the whole point of the mode: a childless
+ * *node* like `[N]` is a category, not a lexical item, so it belongs with the
+ * structure above rather than on the word row.
+ *
+ * One deliberate divergence in `bottom`: jsSyntaxTree only pushes down nodes
+ * that have children, so a childless node's depth there comes out `Infinity`
+ * (`moveParentsDown` takes a minimum over an empty child list) and the node
+ * vanishes. We put every leaf on the bottom row instead.
+ */
+function alignmentDepths(tree: Tree, bottomRow: number): Map<Node, number> {
+  const rows = new Map<Node, number>();
+  const mode = settings.leafAlignment;
+
+  if (mode === "top") return rows;
+
+  if (mode === "words") {
+    tree.root.walk((n) => {
+      if (n.isWord) rows.set(n, bottomRow);
+    });
+    return rows;
+  }
+
+  // "bottom": leaves sit on the bottom row and each parent is pushed down to
+  // just above its highest child. The root always lands back on row 0 — its
+  // longest chain of descendants is what defines `bottomRow` in the first place.
+  const assign = (node: Node): number => {
+    const row = node.isLeaf
+      ? bottomRow
+      : Math.min(...node.children.map(assign)) - 1;
+    rows.set(node, row);
+    return row;
+  };
+  assign(tree.root);
+  return rows;
 }
 
 function drawEdge(g: SVGElement, parent: Node, child: Node) {
@@ -191,7 +231,7 @@ function nodeAriaLabel(node: Node): string {
   if (node.superscript) s += ", superscript " + node.superscript;
   const sub = node.displaySubscript();
   if (sub) s += ", subscript " + sub;
-  s += node.isLeaf ? ", terminal" : ", node";
+  s += node.isWord ? ", word" : ", node";
   return s;
 }
 
@@ -262,7 +302,9 @@ function drawLabel(g: SVGElement, tree: Tree, node: Node, opts: RenderOptions) {
     "dominant-baseline": "central",
     "font-size": settings.label.fontSize,
     "font-family": settings.label.fontFamily,
-    "font-style": node.isLeaf && !node.triangle ? "italic" : "normal",
+    // Words are italicised, the way lexical items are set in running text;
+    // category labels — including childless ones like `[N]` — stay upright.
+    "font-style": node.isWord && !node.triangle ? "italic" : "normal",
     fill: textFill,
   });
   text.textContent = node.label;

@@ -140,7 +140,12 @@ export function toForest(tree: Tree): string {
   const build = (node: Node, depth: number): string => {
     const indent = "  ".repeat(depth + 1);
     if (node.isLeaf) {
-      const content = texEscape(node.label) + scriptSuffix(node);
+      // Mirror the on-screen italics: a word is a lexical item, a childless
+      // node is a category label and stays upright.
+      const base = texEscape(node.label);
+      const content =
+        (node.isWord && !node.triangle ? `\\textit{${base}}` : base) +
+        scriptSuffix(node);
       return `${indent}[${content}${node.triangle ? ", roof" : ""}]`;
     }
     const label = texEscape(node.label) + scriptSuffix(node);

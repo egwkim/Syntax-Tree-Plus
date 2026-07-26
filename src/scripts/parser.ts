@@ -163,6 +163,11 @@ export function parseLabel(raw: string): {
  * `[NP the cat]`             -> NP over one span "the cat" (a triangle)
  * `[NP "the" "cat"]`         -> NP over two separate terminals
  * `[NP the big cat_1]`       -> the span "the big cat", subscript 1
+ * `[NP [N]]`                 -> NP over a childless *node* N — not a word
+ *
+ * Bracketing is what tells a word from a node: content typed bare is a word
+ * (`isWord`), anything in its own `[...]` is a node even when it ends up
+ * childless. Same rule as jsSyntaxTree's VALUE vs NODE.
  */
 export function parse(input: string): ParseResult {
   const trimmed = input.trim();
@@ -178,6 +183,7 @@ export function parse(input: string): ParseResult {
     const { value, next } = readValue(tokens, pos);
     pos = next;
     const node = new Node(value);
+    node.isWord = true; // unbracketed content is a word (jsSyntaxTree's VALUE)
     pos = readScripts(tokens, pos, node);
     // A multi-word terminal renders as a triangle; single words don't.
     if (value.indexOf(" ") >= 0) node.triangle = true;
@@ -206,6 +212,7 @@ export function parse(input: string): ParseResult {
       if (rest) {
         // The label takes no scripts here — a trailing `_1` binds to the run.
         const child = new Node(rest);
+        child.isWord = true;
         pos = readScripts(tokens, pos, child);
         if (rest.indexOf(" ") >= 0) child.triangle = true;
         child.updateTextWidth();

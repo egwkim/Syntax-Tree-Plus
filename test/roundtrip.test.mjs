@@ -24,6 +24,7 @@ const shape = (n) => ({
   sub: n.subscript,
   sup: n.superscript,
   triangle: n.triangle,
+  word: n.isWord,
   children: n.children.map(shape),
 });
 
@@ -159,11 +160,15 @@ test("adjacent single-word terminals stay distinct", () => {
   // Regression: these serialized to one space-separated run ("[NP the cat]")
   // and merged into a single triangle on re-parse. A quoted value is never
   // joined into a neighbouring run, so quoting keeps them apart.
-  const tree = parsed("[NP [the] [cat]]");
+  const tree = parsed('[NP "the" "cat"]');
   assert.equal(tree.root.children.length, 2);
   assert.equal(serialize(tree), '[NP "the" "cat"]');
   assertRoundTrip('[NP "the" "cat"]');
-  assertRoundTrip("[NP [the] [cat]]"); // the bracketed spelling also round-trips
+  // The bracketed spelling round-trips too — but as two childless *nodes*,
+  // which is a different tree, so it keeps its own brackets rather than
+  // being rewritten into quoted words.
+  assert.equal(serialize(parsed("[NP [the] [cat]]")), "[NP [the] [cat]]");
+  assertRoundTrip("[NP [the] [cat]]");
 });
 
 test("three adjacent terminals stay distinct", () => {
@@ -211,6 +216,7 @@ test("two adjacent spans stay distinct, via quoting", () => {
   np.children[0].updateLabel("the big");
   np.children[0].triangle = true;
   const second = new Node("old cat");
+  second.isWord = true; // a span, not a bare category node
   second.triangle = true;
   np.insertChild(second);
 
@@ -223,6 +229,72 @@ test("two adjacent spans stay distinct, via quoting", () => {
     [["the big", true], ["old cat", true]]
   );
   assertRoundTrip(text);
+});
+
+// ---- words vs nodes (jsSyntaxTree's VALUE vs NODE) --------------------
+
+test("bracketing decides word or node, and survives a round-trip", () => {
+  // The distinction a childless-node test can't fake: `cat` is a lexical item,
+  // `[N]` is a category with nothing under it yet.
+  const word = parsed("[N cat]").root.children[0];
+  assert.equal(word.isWord, true);
+  assert.equal(word.isLeaf, true);
+
+  const node = parsed("[NP [N]]").root.children[0];
+  assert.equal(node.isWord, false, "brackets make it a node");
+  assert.equal(node.isLeaf, true, "even though it has no children");
+
+  assert.equal(assertRoundTrip("[NP [N]]"), "[NP [N]]");
+  assert.equal(assertRoundTrip("[NP [N] [V]]"), "[NP [N] [V]]");
+  assert.equal(assertRoundTrip("[NP [Ø]]"), "[NP [Ø]]");
+});
+
+test("a word beside a childless node needs no quoting", () => {
+  // Only two *words* can merge on re-parse; a node's brackets already
+  // delimit the run.
+  const text = assertRoundTrip("[NP the [N]]");
+  assert.equal(text, "[NP the [N]]");
+  const kids = parsed(text).root.children;
+  assert.deepEqual(kids.map((k) => [k.label, k.isWord]), [["the", true], ["N", false]]);
+});
+
+test("toggling a leaf between word and node changes the notation", () => {
+  const tree = parsed("[NP cat]");
+  const leaf = tree.root.children[0];
+  assert.equal(serialize(tree), "[NP cat]");
+
+  leaf.isWord = false; // what the Word/Node toggle does
+  assert.equal(serialize(tree), "[NP [cat]]");
+  assert.equal(parsed(serialize(tree)).root.children[0].isWord, false);
+
+  leaf.isWord = true;
+  assert.equal(serialize(tree), "[NP cat]");
+});
+
+test("a node label with a space stays one node when toggled", () => {
+  // `[the big]` would read back as the node "the" over the word "big", so the
+  // label has to be quoted — otherwise toggling a span to a node loses it.
+  const tree = parsed("[NP the big]");
+  tree.root.children[0].isWord = false;
+  const text = serialize(tree);
+  assert.equal(text, '[NP ["the big"]]');
+  const back = parsed(text).root.children[0];
+  assert.equal(back.label, "the big");
+  assert.equal(back.children.length, 0);
+  assertRoundTrip(text);
+});
+
+test("a word can never hold children", () => {
+  // jsSyntaxTree's VALUE can't have children; giving one a child has to demote
+  // it to a node, or serializing would silently drop the subtree.
+  const tree = parsed("[NP cat]");
+  const leaf = tree.root.children[0];
+  assert.equal(leaf.isWord, true);
+  const child = new Node("x");
+  child.isWord = true;
+  leaf.insertChild(child);
+  assert.equal(leaf.isWord, false, "it's a node now");
+  assert.equal(serialize(tree), "[NP [cat x]]");
 });
 
 // ---- quoting (jsSyntaxTree's escape mechanism) ------------------------
