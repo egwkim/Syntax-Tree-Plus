@@ -11,16 +11,35 @@
     <link rel="stylesheet" href="css/styles.css" />
   </head>
   <body>
+    <!-- Toolbar. Every `.group[data-cat]` doubles as a category on small
+         screens: the compact layout (see toolbar.ts) hides all but one and
+         builds the chip strip in `#toolbar-cats` from these same elements.
+         `.group.quick` groups stay visible in every layout. -->
     <header id="toolbar">
-      <span class="brand">Syntax&nbsp;Tree&nbsp;Plus</span>
+      <span class="brand">
+        <span class="brand-full">Syntax&nbsp;Tree&nbsp;Plus</span>
+        <span class="brand-short" aria-hidden="true">🌳</span>
+      </span>
 
-      <div class="group">
+      <div class="group quick">
+        <button data-action="undo" title="Undo (Ctrl+Z)">↶<span class="lbl"> Undo</span></button>
+        <button data-action="redo" title="Redo (Ctrl+Y)">↷<span class="lbl"> Redo</span></button>
+      </div>
+
+      <div class="group" data-cat="insert" data-cat-label="Insert" data-cat-icon="＋">
         <button data-action="child" title="Add child at end (n)">+ Child</button>
         <button data-action="sib-before" title="Add sibling before (Shift+S)">+ Sib ◀</button>
         <button data-action="sib-after" title="Add sibling after (s)">+ Sib ▶</button>
       </div>
 
-      <div class="group">
+      <div class="group" data-cat="edit" data-cat-label="Edit" data-cat-icon="✎">
+        <button data-action="rename" title="Rename node (e / Enter)">Rename</button>
+        <button data-action="triangle" title="Toggle triangle (t)">△ Triangle</button>
+        <button data-action="wrap" title="Wrap in new parent (w)">Wrap</button>
+        <button data-action="delete" title="Delete node (Del)">Delete</button>
+      </div>
+
+      <div class="group" data-cat="clipboard" data-cat-label="Clipboard" data-cat-icon="✂">
         <button data-action="copy" title="Copy subtree (c)">Copy</button>
         <button data-action="cut" title="Cut subtree (x)">Cut</button>
         <button data-action="paste" title="Paste as last child (v)">Paste</button>
@@ -28,27 +47,28 @@
         <button data-action="paste-after" title="Paste as sibling after selection (Shift+V)">Paste ▶</button>
       </div>
 
-      <div class="group">
-        <button data-action="rename" title="Rename node (e / Enter)">Rename</button>
-        <button data-action="triangle" title="Toggle triangle (t)">△ Triangle</button>
-        <button data-action="wrap" title="Wrap in new parent (w)">Wrap</button>
-        <button data-action="delete" title="Delete node (Del)">Delete</button>
-      </div>
-
-      <div class="group">
+      <div class="group" data-cat="template" data-cat-label="Templates" data-cat-icon="⌸">
         <button data-action="xbar" title="Expand to X-bar skeleton (b)">X-bar</button>
         <button data-action="cptp" title="Expand to CP/TP clause skeleton (Shift+B)">CP/TP</button>
         <button data-action="coordination" title="Wrap in a coordination (&amp;P) template">Coord</button>
+      </div>
+
+      <div class="group" data-cat="tools" data-cat-label="Tools" data-cat-icon="✥">
         <button data-action="toggle-drag" title="Drag nodes to move them">✥ Move</button>
         <button data-action="toggle-link" title="Link two nodes with a movement arrow">⤳ Arrow</button>
       </div>
 
-      <div class="group">
-        <button data-action="undo" title="Undo (Ctrl+Z)">↶ Undo</button>
-        <button data-action="redo" title="Redo (Ctrl+Y)">↷ Redo</button>
+      <div class="group" data-cat="view" data-cat-label="View" data-cat-icon="⤢">
+        <button data-action="zoom-out" title="Zoom out (-)">－</button>
+        <button data-action="zoom-reset" title="Reset zoom to 100% (0)"><span id="zoom-label">100%</span></button>
+        <button data-action="zoom-in" title="Zoom in (+)">＋</button>
+        <button data-action="zoom-fit" title="Fit tree to view (f)">⤢ Fit</button>
+        <button data-action="toggle-align" title="Toggle leaf alignment">⇅ Align</button>
+        <button data-action="toggle-boxes" title="Toggle node boxes">□ Boxes</button>
+        <button data-action="toggle-theme" title="Toggle dark mode">◐ Theme</button>
       </div>
 
-      <div class="group">
+      <div class="group" data-cat="export" data-cat-label="Export" data-cat-icon="⭳">
         <button data-action="export-svg" title="Download SVG">SVG</button>
         <button data-action="export-png" title="Download PNG">PNG</button>
         <button data-action="export-latex" title="Download LaTeX (forest)">LaTeX</button>
@@ -57,20 +77,13 @@
         <button data-action="copy-latex" title="Copy LaTeX (forest) source to the clipboard">⧉ Copy LaTeX</button>
       </div>
 
-      <div class="group">
-        <button data-action="zoom-out" title="Zoom out (-)">－</button>
-        <button data-action="zoom-reset" title="Reset zoom to 100% (0)"><span id="zoom-label">100%</span></button>
-        <button data-action="zoom-in" title="Zoom in (+)">＋</button>
-        <button data-action="zoom-fit" title="Fit tree to view (f)">⤢ Fit</button>
+      <div class="group quick right">
+        <button data-action="settings" title="Settings">⚙<span class="lbl"> Settings</span></button>
+        <button data-action="help" title="Keyboard shortcuts">?<span class="lbl"> Help</span></button>
       </div>
 
-      <div class="group right">
-        <button data-action="toggle-align" title="Toggle leaf alignment">⇅ Align</button>
-        <button data-action="toggle-boxes" title="Toggle node boxes">□ Boxes</button>
-        <button data-action="toggle-theme" title="Toggle dark mode">◐ Theme</button>
-        <button data-action="settings" title="Settings">⚙ Settings</button>
-        <button data-action="help" title="Keyboard shortcuts">? Help</button>
-      </div>
+      <!-- Category chips (compact layout only) — filled by toolbar.ts. -->
+      <nav id="toolbar-cats" aria-label="Toolbar categories"></nav>
     </header>
 
     <nav id="tabbar" role="tablist" aria-label="Trees"></nav>
@@ -183,6 +196,14 @@
             and <strong>×</strong> closes it. Each tab keeps its own undo history.
           </li>
           <li>
+            <strong>On a phone:</strong> the toolbar collapses to a row of
+            category chips — <em>Insert</em>, <em>Edit</em>,
+            <em>Clipboard</em>, <em>Templates</em>, <em>Tools</em>,
+            <em>View</em>, <em>Export</em>. Tap one to show just those buttons;
+            tap it again to hide the row and give the screen back to the tree.
+            Undo/redo and Settings/Help stay put.
+          </li>
+          <li>
             <strong>Zoom &amp; pan:</strong> use the ＋ / － / Fit buttons (or
             <code>+</code> / <code>-</code> / <code>0</code> / <code>f</code>),
             <code>Ctrl</code>/<code>⌘</code>+scroll to zoom toward the pointer,
@@ -199,7 +220,18 @@
 
     <div id="settings-modal" class="modal">
       <div class="modal-body">
-        <h2>Settings</h2>
+        <div class="modal-head">
+          <h2>Settings</h2>
+          <button
+            type="button"
+            class="modal-close"
+            data-action="close-settings"
+            title="Close"
+            aria-label="Close settings"
+          >
+            ×
+          </button>
+        </div>
         <div class="settings-grid">
           <label for="setting-font-size">Font size</label>
           <input type="number" id="setting-font-size" min="8" max="40" step="1" />

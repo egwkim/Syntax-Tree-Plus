@@ -55,6 +55,7 @@ Pure model/logic modules with one controller wiring them to the DOM.
 | `keymap.ts` | Single source of truth for keyboard shortcuts: the command list (id/label/default key/extra aliases), user remappings, canonical key encoding, and lookup. The help table and the remap UI are both rendered from it, so they can't drift. |
 | `persist.ts` | Autosave to localStorage + shareable URL fragment (`#t=`): the tab **workspace** (`saveWorkspace`/`loadWorkspace`, active doc mirrored to `#t=`), the theme, the display prefs (`savePrefs`/`loadPrefs`), and the keymap overrides (`saveKeymap`/`loadKeymap`). `loadDoc` remains to migrate a legacy single-doc save into a tab on boot; `saveDoc` is now **unused** (the workspace blob replaced it) and only kept as its counterpart. |
 | `settings.ts` | Layout/style constants, leaf alignment, theme colors. `THEME_COLORS` + `applyThemeColors` are the single source for the light/dark drawing palette (used by both the theme toggle and the exporters). |
+| `toolbar.ts` | Compact (small-screen) toolbar: builds the category chip strip from the toolbar's own `.group[data-cat]` elements and shows one group at a time. Owns the `body.compact-toolbar` switch. |
 | `app.ts` | Controller. Owns the `Tree` + `Workspace`, wires toolbar/keyboard/drag/text pane, tabs, zoom/pan, inline editing, theme. |
 | `main.ts` | Entry point: `startApp()`. |
 
@@ -163,6 +164,23 @@ Pure model/logic modules with one controller wiring them to the DOM.
 - **Responsive**: the split is a flexbox that switches to `column` under 760px; the
   divider drag reads `flex-direction` to resize along the right axis. Anything new
   in the toolbar should tolerate wrapping.
+- **Compact toolbar** (`toolbar.ts` + `body.compact-toolbar`): all ~35 buttons
+  wrapped to ~380px of chrome on a phone — more than the canvas. On a narrow (or
+  short-and-touch) screen the toolbar instead shows one category at a time: a
+  scrollable strip of chips in `#toolbar-cats`, the open category's buttons on
+  their own scrollable row, and `.group.quick` (undo/redo, settings/help) always
+  visible. Three rules keep it maintainable:
+  - **The chips are generated from the groups.** A category *is* a
+    `.group[data-cat]` in `index.html` (with `data-cat-label`/`data-cat-icon`);
+    adding one to the markup is the whole change, and the two layouts can't drift.
+  - **Nothing is re-parented** — only a class toggles, and the compact rows are
+    `order` on the existing flex children. Every button stays where `app.ts` put
+    it, so the delegated `data-action` handler, `updateHistoryButtons()` and the
+    `.active` toggles on Move/Arrow need no compact-mode special case.
+  - **JS owns the switch.** The CSS keys on the body class, not a media query,
+    so the layout and the chip state can't disagree; the pre-existing 760px
+    tweaks remain the no-JS fallback. Tapping the open chip closes the row (the
+    choice persists via `saveToolbarCat`, where `""` means "collapsed").
 - **Tabs** (`tabs.ts` + `#tabbar`): a `Workspace` holds several named documents;
   only the active one is the live `Tree`. The controller keeps a `Map<tabId,
   History>` so **undo is per-tab**, swapping `historyStack` on switch. Switching

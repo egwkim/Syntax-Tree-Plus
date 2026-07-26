@@ -6,6 +6,7 @@ const THEME_KEY = "syntax-tree-plus:theme";
 const PREFS_KEY = "syntax-tree-plus:prefs";
 const WORKSPACE_KEY = "syntax-tree-plus:workspace";
 const KEYMAP_KEY = "syntax-tree-plus:keymap";
+const TOOLBAR_CAT_KEY = "syntax-tree-plus:toolbar-cat";
 
 /** Mirror a bracket-notation doc into the URL fragment for shareable links. */
 export function updateFragment(text: string) {
@@ -103,6 +104,27 @@ export function loadKeymap(): Record<string, string> | null {
     /* fall through */
   }
   return null;
+}
+
+/**
+ * Remember which compact-toolbar category was open. `""` is meaningful — the
+ * user collapsed the button row — so it's stored rather than removed, and
+ * `loadToolbarCat` returns null only when nothing was ever saved.
+ */
+export function saveToolbarCat(id: string) {
+  try {
+    localStorage.setItem(TOOLBAR_CAT_KEY, id);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function loadToolbarCat(): string | null {
+  try {
+    return localStorage.getItem(TOOLBAR_CAT_KEY);
+  } catch {
+    return null;
+  }
 }
 
 export function saveTheme(theme: string) {

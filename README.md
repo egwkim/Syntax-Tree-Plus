@@ -31,6 +31,10 @@ you publish. Syntax Tree Plus gives you both at once:
 - **Undo / redo**, **autosave** (localStorage), and **shareable URLs** (the tree
   is encoded in the link).
 - **Light / dark theme**, leaf-alignment and node-box toggles.
+- **Phone-friendly toolbar** — on a small screen the toolbar collapses to a row
+  of category chips (Insert / Edit / Clipboard / Templates / Tools / View /
+  Export); tap one to show just those buttons, tap it again to hide them and
+  give the whole screen to the tree.
 
 ## Keyboard shortcuts
 
@@ -108,6 +112,7 @@ src/
     history.ts          undo / redo
     persist.ts          localStorage + URL persistence
     settings.ts         layout & style settings
+    toolbar.ts          compact (mobile) toolbar: category chips
     app.ts              controller: wires GUI, text sync, keyboard
     main.ts             entry point
 ```

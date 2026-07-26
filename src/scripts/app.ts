@@ -5,6 +5,7 @@ import { parse, parseLabel } from "./parser.js";
 import { serialize } from "./serialize.js";
 import { History } from "./history.js";
 import { Workspace } from "./tabs.js";
+import { setupCompactToolbar } from "./toolbar.js";
 import {
   COMMANDS,
   FIXED_KEYS,
@@ -1568,6 +1569,9 @@ export function startApp() {
 
   // ---- divider (resize panes) ----------------------------------------
   setupDivider();
+
+  // ---- compact toolbar (small screens) --------------------------------
+  setupCompactToolbar();
 
   // ---- boot ----------------------------------------------------------
   // Restore persisted display settings (font size, spacing, edge style,

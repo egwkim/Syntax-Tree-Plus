@@ -70,6 +70,11 @@ body {
   color: var(--accent);
 }
 
+/* The short brand (a mark, not a wordmark) only appears in the compact layout. */
+#toolbar .brand-short {
+  display: none;
+}
+
 #toolbar .group {
   display: flex;
   gap: 4px;
@@ -487,6 +492,41 @@ body.link-mode #tree-container [data-node-id] {
 .modal-body h2 {
   margin-top: 0;
 }
+/* Sticky title row so the × stays reachable however far the panel is scrolled.
+   Negative margins pull it out to the body's padding edges; the matching
+   padding keeps the text where it was, and top: 0 then pins it to the
+   scrollport's top edge with its own background hiding the content behind. */
+.modal-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: -24px -28px 0;
+  padding: 24px 28px 8px;
+  background: var(--bg);
+}
+.modal-head h2 {
+  margin: 0;
+}
+.modal-close {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--muted);
+  font-size: 26px;
+  line-height: 1;
+  cursor: pointer;
+}
+.modal-close:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
 .modal-body code {
   background: var(--panel-2);
   padding: 1px 5px;
@@ -684,10 +724,141 @@ body.link-mode #tree-container [data-node-id] {
   }
 }
 
+/* ---- Compact toolbar: one category at a time (small screens) ----
+   Driven by `body.compact-toolbar`, which toolbar.ts toggles from its own
+   media query (narrow, or short-and-touch) — one owner, so the class and the
+   chip state can't disagree. Without JS the wrapping toolbar above, and its
+   max-width tweaks, stay as the fallback.
+
+   Layout on a phone, using `order` (every item is a direct flex child of
+   #toolbar, so ordering them is enough — nothing is re-parented):
+     row 1  brand · undo/redo · settings/help
+     row 2  the category chips, scrolled horizontally
+     row 3  the open category's buttons (absent when collapsed) */
+
+#toolbar-cats {
+  display: none;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* The strip is a compact affordance; its own scrollbar would eat the height
+     we're trying to save. */
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+#toolbar-cats::-webkit-scrollbar {
+  display: none;
+}
+
+#toolbar-cats .cat {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  min-height: 34px;
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--btn-bg);
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+#toolbar-cats .cat[aria-expanded="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+#toolbar-cats .cat-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
+body.compact-toolbar #toolbar {
+  gap: 4px;
+  row-gap: 6px;
+  padding: 6px 8px;
+}
+
+/* Row 1: the always-available controls. */
+body.compact-toolbar #toolbar .brand {
+  order: 0;
+  flex: 0 0 auto;
+  margin: 0 2px 0 0;
+  font-size: 18px;
+}
+body.compact-toolbar #toolbar .brand-full {
+  display: none;
+}
+body.compact-toolbar #toolbar .brand-short {
+  display: inline;
+}
+body.compact-toolbar #toolbar .group.quick {
+  order: 1;
+  padding: 0;
+  border-right: none;
+}
+body.compact-toolbar #toolbar .group.quick.right {
+  order: 2;
+  margin-left: auto;
+}
+/* Icon-only in the compact rows: the label is dropped (the title attribute
+   still names the button, and becomes its accessible name) and the glyph is
+   sized up so it reads on its own. */
+body.compact-toolbar #toolbar .group.quick .lbl {
+  display: none;
+}
+body.compact-toolbar #toolbar .group.quick button {
+  min-width: 40px;
+  padding: 4px 10px;
+  font-size: 17px;
+  line-height: 1;
+}
+
+/* Row 2: the chips. */
+body.compact-toolbar #toolbar-cats {
+  display: flex;
+  order: 3;
+  flex: 1 0 100%;
+  min-width: 0;
+}
+
+/* Row 3: only the open category's buttons; the rest stay in the DOM, hidden. */
+body.compact-toolbar #toolbar .group[data-cat] {
+  display: none;
+}
+body.compact-toolbar #toolbar .group[data-cat].cat-active {
+  display: flex;
+  order: 4;
+  flex: 1 0 100%;
+  gap: 6px;
+  min-width: 0;
+  padding: 2px 0 0;
+  border-right: none;
+  /* A long group (Clipboard, Export) scrolls sideways rather than wrapping
+     into the extra rows this layout exists to remove. */
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+body.compact-toolbar #toolbar .group[data-cat].cat-active::-webkit-scrollbar {
+  display: none;
+}
+body.compact-toolbar #toolbar .group[data-cat].cat-active button {
+  flex: 0 0 auto;
+}
+
 /* Coarse pointers (touch): give buttons a comfortable tap target. */
 @media (pointer: coarse) {
   #toolbar button {
     min-height: 40px;
+  }
+  #toolbar-cats .cat {
+    min-height: 38px;
   }
   #divider {
     flex-basis: 12px;
