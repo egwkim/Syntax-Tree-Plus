@@ -154,6 +154,32 @@ test("a single-word terminal with a subscript is not a triangle", () => {
   assert.equal(trace.triangle, false);
 });
 
+// ---- triangle-ness is never stored in the notation (jsSyntaxTree parity) --
+
+test("~ is ordinary text, not notation — jsSyntaxTree has no per-node marker", () => {
+  // A dedicated per-node triangle marker was tried and reverted: jsSyntaxTree
+  // only has a *global* "Enable triangles" toggle (settings.showTriangles),
+  // never a per-node spelling, so `~` must stay plain label content.
+  const leaf = parsed("[NP cat~]").root.children[0];
+  assert.equal(leaf.label, "cat~");
+  assertRoundTrip("[NP cat~]");
+});
+
+test("manually toggling .triangle never changes what serialize emits", () => {
+  // The `t` key / toggleTriangle flips .triangle for this session's rendering
+  // only (like `color`) — it's not part of the notation, so serialize must be
+  // a pure function of the label, blind to .triangle either way.
+  const tree = parsed("[NP the big cat]");
+  const leaf = tree.root.children[0];
+  assert.equal(leaf.triangle, true);
+  leaf.triangle = false;
+  assert.equal(serialize(tree), "[NP the big cat]");
+
+  const single = parsed("[NP cat]");
+  single.root.children[0].triangle = true;
+  assert.equal(serialize(single), "[NP cat]");
+});
+
 // ---- Fix B: adjacent terminals ---------------------------------------
 
 test("adjacent single-word terminals stay distinct", () => {
@@ -370,6 +396,38 @@ test("an unterminated quote is tolerated while typing", () => {
   const { tree, error } = parse('[NP "the big');
   assert.equal(error, null);
   assert.equal(tree.root.children[0].label, "the big");
+});
+
+// ---- literal quote (SQL/CSV-style doubling) ----------------------------
+
+test("a doubled quote inside a quoted string is a literal quote", () => {
+  const tree = parsed('[N "he said ""hi"" to me"]');
+  assert.equal(tree.root.children[0].label, 'he said "hi" to me');
+});
+
+test("a literal quote round-trips via doubling", () => {
+  const text = assertRoundTrip('[N "he said ""hi"" to me"]');
+  assert.equal(text, '[N "he said ""hi"" to me"]');
+});
+
+test("serialize doubles a literal quote it needs to emit", () => {
+  const tree = parsed("[N x]");
+  const leaf = tree.root.children[0];
+  leaf.updateLabel('say "hi"');
+  // updateLabel is a bare setter — callers re-derive triangle themselves
+  // (parser.ts, app.ts); match that here so this test stays about quoting.
+  leaf.triangle = true;
+  const text = serialize(tree);
+  assert.equal(text, '[N "say ""hi"""]');
+  assert.equal(parsed(text).root.children[0].label, 'say "hi"');
+  assertRoundTrip(text);
+});
+
+test("a label that is only a quote mark round-trips", () => {
+  const tree = parsed("[N x]");
+  tree.root.children[0].updateLabel('"');
+  assert.equal(serialize(tree), '[N """"]');
+  assertRoundTrip(serialize(tree));
 });
 
 test("backslashes are ordinary characters now (no escape mechanism)", () => {

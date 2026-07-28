@@ -2,18 +2,20 @@ import { Node, Tree } from "./tree.js";
 
 /**
  * Characters that would break a bare token: the structural brackets, the script
- * markers, the quote itself, and whitespace. There is no escape character —
- * jsSyntaxTree has none — so a label containing any of these is quoted instead.
+ * markers, the quote itself, and whitespace. There is no backslash escape
+ * character — jsSyntaxTree has none — so a label containing any of these is
+ * quoted instead.
  */
 const NEEDS_QUOTING = /[\s[\]_^"]/;
 
 /**
- * Wrap `text` in quotes. A literal `"` has no representation at all
- * (jsSyntaxTree's quoted strings carry no escape mechanism), so one is dropped
- * rather than emitted to produce text that wouldn't parse back.
+ * Wrap `text` in quotes, doubling any literal `"` (SQL/CSV-style) so it
+ * survives inside the quoted string — the one addition beyond jsSyntaxTree's
+ * own quoting, which has no inner escape at all. See the tokenizer's `"`
+ * branch in parser.ts for the read side.
  */
 function quoted(text: string): string {
-  return `"${text.replace(/"/g, "")}"`;
+  return `"${text.replace(/"/g, '""')}"`;
 }
 
 /** Render `text` as one token, quoting it only when it contains a delimiter. */

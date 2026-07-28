@@ -50,6 +50,11 @@ export const settings = {
   leafAlignment: "words" as LeafAlignment,
   // Draw a border box around every node label.
   showNodeBoxes: false,
+  // jsSyntaxTree's "Enable triangles" checkbox: a global, notation-independent
+  // override. When false, nothing triangles regardless of word count or a
+  // node's own `triangle` field — matching jsSyntaxTree, which has no
+  // per-node spelling for this at all.
+  showTriangles: true,
   // Auto-number repeated node labels with subscripts (NP → NP₁, NP₂, …).
   // Purely a display option (jsSyntaxTree parity) — see `applyAutoSubscripts`.
   autoSubscript: false,

@@ -143,6 +143,14 @@ test("the notation's quoting rules hold inside each tree of a document", () => {
   );
 });
 
+test("doubled quotes hold inside each tree of a document", () => {
+  const text = '[NP cat] [N "she said ""hi"""]';
+  const [a, b] = parsedAll(text);
+  assert.equal(a.root.children[0].label, "cat");
+  assert.equal(b.root.children[0].label, 'she said "hi"');
+  assertRoundTrip(text);
+});
+
 test("words and childless nodes stay distinct across trees", () => {
   // The word/node split is carried by bracketing, so it has to survive being
   // one tree of several just as it does on its own.

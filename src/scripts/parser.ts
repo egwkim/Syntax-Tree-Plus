@@ -1,4 +1,4 @@
-import { Node, Tree } from "./tree.js";
+import { Node, Tree, derivedTriangle } from "./tree.js";
 
 export interface ParseResult {
   tree: Tree | null;
@@ -63,10 +63,27 @@ function tokenize(input: string): Token[] {
       tokens.push({ type: "sup" });
       i++;
     } else if (ch === '"') {
-      const end = input.indexOf('"', i + 1);
-      const value = end === -1 ? input.slice(i + 1) : input.slice(i + 1, end);
+      // Two quotes in a row is a literal `"` (SQL/CSV-style doubling) and the
+      // string continues; a single `"` ends it. This is the one addition
+      // beyond jsSyntaxTree's own quoting — its quoted strings have no inner
+      // escape at all — and it's what makes a literal quote expressible; see
+      // `quoted` in serialize.ts for the write side.
+      let value = "";
+      let j = i + 1;
+      while (j < input.length) {
+        if (input[j] === '"') {
+          if (input[j + 1] === '"') {
+            value += '"';
+            j += 2;
+            continue;
+          }
+          break;
+        }
+        value += input[j];
+        j++;
+      }
       tokens.push({ type: "word", value, quoted: true });
-      i = end === -1 ? input.length : end + 1;
+      i = j < input.length ? j + 1 : input.length;
     } else {
       let j = i;
       while (j < input.length && !isSpace(input[j]) && !DELIMITERS.has(input[j])) j++;
@@ -203,7 +220,7 @@ export function parseAll(input: string): ParseAllResult {
     node.isWord = true; // unbracketed content is a word (jsSyntaxTree's VALUE)
     pos = readScripts(tokens, pos, node);
     // A multi-word terminal renders as a triangle; single words don't.
-    if (value.indexOf(" ") >= 0) node.triangle = true;
+    node.triangle = derivedTriangle(value);
     node.updateTextWidth();
     return node;
   }
@@ -231,7 +248,7 @@ export function parseAll(input: string): ParseAllResult {
         const child = new Node(rest);
         child.isWord = true;
         pos = readScripts(tokens, pos, child);
-        if (rest.indexOf(" ") >= 0) child.triangle = true;
+        child.triangle = derivedTriangle(rest);
         child.updateTextWidth();
         node.insertChild(child);
       } else {

@@ -159,6 +159,7 @@ export function savePrefs() {
     edgeStyle: settings.edge.style,
     leafAlignment: settings.leafAlignment,
     showNodeBoxes: settings.showNodeBoxes,
+    showTriangles: settings.showTriangles,
     autoSubscript: settings.autoSubscript,
     forestLayout: settings.forestLayout,
   };
@@ -211,6 +212,8 @@ export function loadPrefs() {
     settings.leafAlignment = ALIGNMENTS[p.leafAlignment];
   if (typeof p.showNodeBoxes === "boolean")
     settings.showNodeBoxes = p.showNodeBoxes;
+  if (typeof p.showTriangles === "boolean")
+    settings.showTriangles = p.showTriangles;
   if (typeof p.autoSubscript === "boolean")
     settings.autoSubscript = p.autoSubscript;
   if (p.forestLayout === "row" || p.forestLayout === "column")

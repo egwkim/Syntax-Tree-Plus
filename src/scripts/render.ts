@@ -145,7 +145,7 @@ function drawTree(
 
   tree.root.walk((node) => {
     node.children.forEach((child) => {
-      if (child.isWord && child.triangle) {
+      if (child.isWord && child.triangle && settings.showTriangles) {
         drawTriangle(trianglesG, node, child);
       } else {
         drawEdge(edgesG, node, child);
@@ -396,8 +396,11 @@ function drawLabel(
     "font-size": settings.label.fontSize,
     "font-family": settings.label.fontFamily,
     // Words are italicised, the way lexical items are set in running text;
-    // category labels — including childless ones like `[N]` — stay upright.
-    "font-style": node.isWord && !node.triangle ? "italic" : "normal",
+    // category labels — including childless ones like `[N]` — stay upright. A
+    // drawn triangle is its own visual cue, so an italicised span only skips
+    // italics when a triangle is actually being drawn (not just implied but
+    // suppressed by `showTriangles`).
+    "font-style": node.isWord && !(node.triangle && settings.showTriangles) ? "italic" : "normal",
     fill: textFill,
   });
   text.textContent = node.label;
@@ -450,7 +453,7 @@ function drawLabel(
 
 // --- Movement arrows ---------------------------------------------------
 
-interface MovementPair {
+export interface MovementPair {
   from: Node; // trace / lower element
   to: Node; // antecedent
 }
@@ -460,7 +463,7 @@ interface MovementPair {
  * linked. The trace (a leaf labelled `t`, `t*`, `e`, or `*`) is the arrow's
  * source; its antecedent is the target.
  */
-function collectMovement(tree: Tree): MovementPair[] {
+export function collectMovement(tree: Tree): MovementPair[] {
   const byIndex = new Map<string, Node[]>();
   tree.root.walk((n) => {
     if (n.subscript) {
@@ -479,10 +482,20 @@ function collectMovement(tree: Tree): MovementPair[] {
     const traces = nodes.filter(isTrace);
     const antecedents = nodes.filter((n) => !isTrace(n));
     if (traces.length > 0 && antecedents.length > 0) {
-      const target = antecedents[0];
-      traces.forEach((tr) => pairs.push({ from: tr, to: target }));
+      // Successive-cyclic movement: a landing site is always shallower than
+      // the position it moved from, so ordering the whole co-indexed group by
+      // depth (stable on ties, so same-depth nodes keep their tree/document
+      // order) puts the antecedent first and each trace after the one it
+      // moved from. Linking every node to the previous one in that order
+      // chains trace -> trace -> antecedent instead of fanning every trace
+      // out to a single target.
+      const chain = [...nodes].sort((a, b) => a.depth - b.depth);
+      for (let i = 1; i < chain.length; i++) {
+        pairs.push({ from: chain[i], to: chain[i - 1] });
+      }
     } else {
-      // No explicit trace — link later occurrences to the first.
+      // No explicit trace (plain Arrow-mode co-indexation) — link later
+      // occurrences to the first rather than chaining them.
       for (let i = 1; i < nodes.length; i++) {
         pairs.push({ from: nodes[i], to: nodes[0] });
       }

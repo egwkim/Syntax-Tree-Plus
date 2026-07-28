@@ -11,6 +11,19 @@ function measureFont(): string {
 let nextNodeId = 1;
 
 /**
+ * The triangle state a word's label implies on its own: multi-word spans
+ * triangle, single words don't. `parse` sets a fresh word's `triangle` from
+ * this; the inline-edit commit in app.ts re-derives it the same way on every
+ * rename, so a stale triangle can't survive shrinking a span to one word.
+ * Notation never stores a disagreement with this default — see the
+ * `showTriangles` display setting for the jsSyntaxTree-compatible way to
+ * suppress triangles without touching the bracket text.
+ */
+export function derivedTriangle(label: string): boolean {
+  return label.indexOf(" ") >= 0;
+}
+
+/**
  * A single node in a syntax tree.
  *
  * A node is either a **labelled node** such as `NP`, `VP`, `S`, or a **word**

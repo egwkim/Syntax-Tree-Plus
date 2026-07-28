@@ -1,4 +1,4 @@
-import { Tree, Node } from "./tree.js";
+import { Tree, Node, derivedTriangle } from "./tree.js";
 import { render } from "./render.js";
 import { settings, applyThemeColors, LeafAlignment } from "./settings.js";
 import { parseAll, parseLabel } from "./parser.js";
@@ -594,11 +594,14 @@ export function startApp() {
   /**
    * The node as a single editable token. A label holding a delimiter is quoted,
    * so what the editor shows is exactly what `parseLabel` reads back on commit
-   * (`a_b` would otherwise return as base `a` + subscript `b`). Spaces are left
-   * bare — a multi-word terminal is the normal way to type a triangle.
+   * (`a_b` would otherwise return as base `a` + subscript `b`); a literal `"`
+   * is doubled for the same reason (see serialize.ts's `quoted`). Spaces are
+   * left bare — a multi-word terminal is the normal way to type a triangle.
    */
   function rawToken(node: Node): string {
-    let s = /["[\]_^]/.test(node.label) ? `"${node.label.replace(/"/g, "")}"` : node.label;
+    let s = /["[\]_^]/.test(node.label)
+      ? `"${node.label.replace(/"/g, '""')}"`
+      : node.label;
     if (node.superscript) s += "^" + node.superscript;
     if (node.subscript) s += "_" + node.subscript;
     return s;
@@ -641,8 +644,12 @@ export function startApp() {
         node.updateLabel(base);
         node.subscript = sub;
         node.superscript = sup;
-        // Multi-word terminal becomes a triangle automatically.
-        if (node.isWord && base.indexOf(" ") >= 0) node.triangle = true;
+        // A rename is a fresh value, so triangle-ness reverts to what the new
+        // label implies (multi-word -> triangle) rather than keeping whatever
+        // it was — otherwise shrinking "the big cat" to "cat" would leave a
+        // stale triangle. A manual override (the `t` key) is a separate,
+        // later action and isn't touched by editing text elsewhere.
+        if (node.isWord) node.triangle = derivedTriangle(base);
         node.updateTextWidth();
         changed = true;
       }
@@ -911,6 +918,12 @@ export function startApp() {
     },
     "toggle-boxes"() {
       settings.showNodeBoxes = !settings.showNodeBoxes;
+      savePrefs();
+      renderTree();
+    },
+    "toggle-triangles"() {
+      settings.showTriangles = !settings.showTriangles;
+      flashStatus(settings.showTriangles ? "Triangles on" : "Triangles off");
       savePrefs();
       renderTree();
     },
