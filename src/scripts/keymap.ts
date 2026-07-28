@@ -64,6 +64,9 @@ export const COMMANDS: CommandDef[] = [
   { id: "zoom-out", label: "Zoom out", defaultKey: "-", category: "View", global: true },
   { id: "zoom-reset", label: "Reset zoom (100%)", defaultKey: "0", category: "View", global: true },
   { id: "zoom-fit", label: "Fit tree to view", defaultKey: "f", category: "View", global: true },
+
+  // Text pane
+  { id: "pretty-print", label: "Pretty-print bracket notation", defaultKey: "Shift+p", category: "Text", global: true },
 ];
 
 /** Fixed structural shortcuts the controller handles directly (shown in help,

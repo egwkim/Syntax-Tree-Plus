@@ -2,7 +2,7 @@ import { Tree, Node, derivedTriangle } from "./tree.js";
 import { render } from "./render.js";
 import { settings, applyThemeColors, LeafAlignment } from "./settings.js";
 import { parseAll, parseLabel } from "./parser.js";
-import { serializeAll } from "./serialize.js";
+import { serializeAll, serializePretty } from "./serialize.js";
 import { History } from "./history.js";
 import { Workspace, type TabData } from "./tabs.js";
 import { setupCompactToolbar } from "./toolbar.js";
@@ -110,6 +110,10 @@ export function startApp() {
   const ZOOM_MAX = 4;
   let clipboard: Node | null = null;
   let inlineEditor: HTMLInputElement | null = null;
+  // The active editor's own `finish`, so `cancelInlineEdit` can close it
+  // through the same single-fire path as Enter/Escape/blur instead of
+  // reaching in and removing the <input> directly (see cancelInlineEdit).
+  let inlineEditFinish: ((commit: boolean) => void) | null = null;
   let dragMode = false;
   let linkMode = false;
   let linkSource: Node | null = null;
@@ -224,8 +228,11 @@ export function startApp() {
   let lastSvg: SVGSVGElement | null = null;
 
   function renderTree() {
-    // The SVG is rebuilt from scratch, which drops focus; if the user was
-    // navigating with the keyboard, put focus back on the selected node.
+    // The SVG is rebuilt from scratch: it would strand (and race, on a
+    // trailing blur) an open inline editor, and it drops DOM focus — so close
+    // the editor first, and if the user was navigating with the keyboard, put
+    // focus back on the selected node afterwards.
+    cancelInlineEdit();
     const refocus = treeHasFocus();
     const svg = render(trees, container, (node) => {
       if (linkMode) {
@@ -543,6 +550,11 @@ export function startApp() {
 
   // ---- IDE-style bracket handling in the text pane -------------------
   textInput.addEventListener("keydown", (e) => {
+    // Only bare `[` / `]` / Backspace trigger auto-pairing — a chord that
+    // happens to end in one of those keys (an OS/browser shortcut) should
+    // reach the browser unmodified, and an IME composition keystroke isn't a
+    // literal character yet.
+    if (e.isComposing || e.ctrlKey || e.altKey || e.metaKey) return;
     const el = textInput;
     const start = el.selectionStart;
     const end = el.selectionEnd;
@@ -637,6 +649,7 @@ export function startApp() {
       const value = input.value.trim();
       input.remove();
       if (inlineEditor === input) inlineEditor = null;
+      if (inlineEditFinish === finish) inlineEditFinish = null;
 
       let changed = false;
       if (commit) {
@@ -683,16 +696,20 @@ export function startApp() {
 
     container.appendChild(input);
     inlineEditor = input;
+    inlineEditFinish = finish;
     input.focus();
     input.select();
   }
 
+  /**
+   * Close the open inline editor, committing whatever it holds — the same
+   * outcome as blurring it. Routed through the editor's own `finish` (not a
+   * raw `.remove()`): removing a focused element fires `blur` synchronously,
+   * and `finish`'s `done` guard is what keeps that from re-entering and
+   * double-removing the <input>.
+   */
   function cancelInlineEdit() {
-    if (inlineEditor) {
-      const ed = inlineEditor;
-      inlineEditor = null;
-      ed.remove();
-    }
+    inlineEditFinish?.(true);
   }
 
   container.addEventListener("dblclick", (e) => {
@@ -987,6 +1004,19 @@ export function startApp() {
     "zoom-out": () => zoomBy(1 / 1.2),
     "zoom-reset": () => resetZoom(),
     "zoom-fit": () => fitToView(),
+    "pretty-print"() {
+      // Reformats the pane from the live trees, not the current text — so it
+      // also normalizes stray whitespace/quoting rather than just re-indenting
+      // what's there. The trees themselves are unchanged (no re-render needed).
+      const pretty = trees.map((t) => serializePretty(t)).join("\n\n");
+      if (pretty === textInput.value) return;
+      historyStack.push(pretty);
+      persistActive(pretty);
+      textInput.value = pretty;
+      afterProgrammaticValue();
+      updateHistoryButtons(); // no renderTree(), which normally does this
+      flashStatus("Pretty-printed");
+    },
     "new-tab": () => addTab(),
     "duplicate-tab": () => duplicateTab(),
     "reopen-tab": () => reopenTab(),
@@ -1074,7 +1104,22 @@ export function startApp() {
     setTrees(parsed, path ?? undefined);
     if (!path) selectNode(null); // nothing was selected — keep it that way
     persistActive(state);
+
+    // A plain `.value` assignment resets the caret to the end, which is
+    // jarring when Ctrl+Z fires while the text pane has focus (it's a fixed
+    // key, so it works mid-typing). Map the pre-undo caret across the diff
+    // between the old and new text — the same technique `reconcile` uses to
+    // keep `autoCloses` valid — instead of just dropping it.
+    const d = diffRange(lastValue, state);
+    const mapCaret = (idx: number) => {
+      const mapped = adjustIndex(idx, d);
+      return mapped >= 0 ? mapped : d.start;
+    };
+    const caretStart = mapCaret(textInput.selectionStart);
+    const caretEnd = mapCaret(textInput.selectionEnd);
     textInput.value = state;
+    textInput.selectionStart = caretStart;
+    textInput.selectionEnd = caretEnd;
     afterProgrammaticValue();
     parseError.classList.remove("visible");
     renderTree();

@@ -64,7 +64,7 @@ Pure model/logic modules with one controller wiring them to the DOM.
 | --- | --- |
 | `tree.ts` | `Node` / `Tree` model. Node = label + `subscript`/`superscript`/`triangle` + children. A node is either a **word** (`isWord`) or a labelled **node** — see the words-vs-nodes note below. Also width measurement and layout fields. |
 | `parser.ts` | Bracket notation → trees. `parseAll` reads a whole **document** (every top-level bracket group) — that's what the app calls; `parse` is the single-tree wrapper returning the first. Own tokenizer (`[`/`]`/`_`/`^`/word/`"…"`); tolerant — auto-closes missing `]`, missing labels and unterminated quotes, and skips junk *between* trees. `parseLabel` splits `NP_1^0` into base/sub/sup and shares that tokenizer. Bracketing is what marks a word: bare content is a word, `[...]` is a node. |
-| `serialize.ts` | `Tree` → bracket notation. Inverse of the parser: words go out bare, nodes keep their brackets (`[N]` even when childless), and a label/word is quoted only when it would otherwise be misread (see the quoting notes below), so ordinary documents stay bare. `serializeAll` is the document form (one tree per line). `serializePretty` (multi-line) exists but is **unused**. |
+| `serialize.ts` | `Tree` → bracket notation. Inverse of the parser: words go out bare, nodes keep their brackets (`[N]` even when childless), and a label/word is quoted only when it would otherwise be misread (see the quoting notes below), so ordinary documents stay bare. `serializeAll` is the document form (one tree per line). `serializePretty` (multi-line, one tree) backs the toolbar's Pretty-print button — `app.ts` joins one call per tree with a blank line, since there's no document-level wrapper. |
 | `brackets.ts` | Pure, DOM-free helpers for the text pane: bracket matching (quote-aware — a `[` inside `"…"` is label text, not structure), matched-pair-at-caret detection, highlight-HTML building, and edit diff/position tracking. Unit-testable without a browser. |
 | `render.ts` | `Tree[]` → one `<svg>`. Two passes per tree (`layoutTree` positions, `drawTree` draws), then the boxes are composed onto one canvas — row or column per `settings.forestLayout`. Handles triangles, scripts, movement arrows, leaf alignment, bounding-box sizing. Tags each node group with `data-node-id`. |
 | `edit.ts` | Pure tree ops: add child/sibling (positional, each with a word-or-node choice), `toggleWordNode`, delete (promotes children), wrap, templates (X-bar, CP/TP, coordination), `linkNodes`/`nextSubscript` (movement-arrow tool), `applyAutoSubscripts` (auto-subscript display option), `reparent`, `isDescendant`. |
@@ -108,6 +108,20 @@ Pure model/logic modules with one controller wiring them to the DOM.
   on commit. `rawToken` quotes a label holding a delimiter, so reopening the editor
   on `a_b` shows `"a_b"` rather than silently re-splitting it into base +
   subscript. Blank leaves are discarded on commit/cancel.
+  `renderTree()` calls `cancelInlineEdit()` before rebuilding the SVG — `render()`
+  clears `#tree-container`, which is where the editor's `<input>` lives, so any
+  render while it's open (`resize` is the reachable path; `startInlineEdit`
+  itself calls it too, to close a stale editor before opening the next one)
+  would otherwise strand it mid-edit. `cancelInlineEdit` doesn't touch the
+  `<input>` directly, though: closing (or reopening over) an *unfocused* editor
+  would still need to reach it, and reaching in with a bare `.remove()` is a
+  trap — removing a focused element fires `blur` synchronously, which re-enters
+  `finish()` and tries to remove the (already detached) input a second time. It
+  instead calls the open editor's own `finish(true)` (tracked in
+  `inlineEditFinish`, alongside `inlineEditor`) — the same single-fire path
+  Enter/Escape/blur already use, gated by `finish`'s own `done` flag — so a
+  dismiss behaves exactly like a blur (commits, doesn't discard) and can't
+  double-remove the node.
 - **Movement arrows** are derived, not drawn explicitly: **any** two nodes of one
   tree that share a subscript are linked. A trace (`t`, `t*`, `e`, `*` —
   `collectMovement`'s regex, case-insensitive) only decides *direction*. With at
@@ -208,11 +222,20 @@ Pure model/logic modules with one controller wiring them to the DOM.
   arrows, and inline editing use.
 - **Text-pane bracket handling** (`app.ts`, textarea `keydown`): IDE-style — select
   text + `[` wraps it; `[` alone inserts `[]` with the caret inside; `]` types over
-  an auto-inserted `]` (only); Backspace between an empty `[]` deletes both.
+  an auto-inserted `]` (only); Backspace between an empty `[]` deletes both. The
+  handler bails immediately on `isComposing` (an IME keystroke isn't a literal
+  character yet) or any of Ctrl/Alt/Meta, so a chord that happens to end in `[`
+  reaches the browser unmodified instead of being hijacked as auto-pairing.
   Type-over is gated on `autoCloses`, the tracked indices of `]` we auto-inserted:
   positions are kept in sync with edits (`reconcile`, via `diffRange`/`adjustIndex`)
   and dropped once the caret leaves their pair (`pruneAutoCloses`). A `]` the user
   typed themselves is never in that set, so it's always inserted literally.
+  `diffRange`/`adjustIndex` are reused for the text-pane caret itself:
+  `restoreFromHistory` (undo/redo, a fixed key that fires even mid-typing) maps
+  the pre-undo caret across the diff between the old and new text instead of
+  letting the `.value` assignment reset it to the end — falling back to the
+  start of the changed range when the caret sat inside whatever the undo
+  replaced, since there's no meaningful "same spot" to map to there.
 - **Text-pane syntax highlighting**: the `<textarea>` renders transparent glyphs
   over a mirror `<div>` (`#text-highlights`) that re-renders the same text with the
   matching bracket pair at the caret boxed (VS Code style, matching-pair only). The
@@ -356,12 +379,12 @@ Pure model/logic modules with one controller wiring them to the DOM.
 - Module imports use explicit `.js` extensions (ESM output).
 - `id` on `Node` is a per-session counter, not persisted.
 - **Deliberately unwired exports.** Several exports exist with no caller and are
-  not dead code by accident: `serializePretty` (awaiting the pretty-print button),
-  `saveDoc` (counterpart of the legacy `loadDoc`), `keymap.bindingToDefault`,
-  `Workspace.single`, `edit.addChild`/`addSibling` (back-compat wrappers over the
-  positional forms) and `settings.label.selectedColor`. `deleteNode`/`wrapNode`
-  also take a `tree` argument that only `wrapNode` uses. Check this list before
-  "cleaning up" or re-implementing one of them.
+  not dead code by accident: `saveDoc` (counterpart of the legacy `loadDoc`),
+  `keymap.bindingToDefault`, `Workspace.single`, `edit.addChild`/`addSibling`
+  (back-compat wrappers over the positional forms) and
+  `settings.label.selectedColor`. `deleteNode`/`wrapNode` also take a `tree`
+  argument that only `wrapNode` uses. Check this list before "cleaning up" or
+  re-implementing one of them.
 
 ## TODO — open fixes & improvements
 
@@ -386,22 +409,11 @@ Bugs
       capture-phase key listener doesn't check whether the panel is open — so the
       next keypress *anywhere*, including inside the text pane, is swallowed and
       bound to the armed command.
-- [ ] **The inline editor doesn't survive a re-render, and races it.** `render()`
-      clears `#tree-container`, which is where `startInlineEdit` parks its
-      `<input>`. Any render while the editor is open (the `resize` handler is the
-      reachable path) removes the input mid-render; the resulting `blur` runs
-      `finish(true)` → `mutated()` → a **nested** `renderTree()` that appends its
-      SVG before the outer call appends its own, leaving two trees stacked in the
-      container. Call `cancelInlineEdit()` at the top of `renderTree`, as the
-      `scroll` handler already does.
 - [ ] **Zoom in is documented as `+` but bound to `=`.** The button title in
       `index.html` and the help modal both say `+`, while `COMMANDS` has `=` and
       `canonicalFromEvent` renders Shift+= as `Shift++`, which matches nothing —
       so pressing what the UI advertises does nothing. Add `+`/`Shift+=` as an
       `extraKeys` alias, or fix the text.
-- [ ] **Undo from the text pane drops the caret to the end.** Ctrl+Z is captured
-      globally even while typing, and `restoreFromHistory` assigns
-      `textInput.value`, which resets the selection to the end of the document.
 
 Robustness
 - [ ] **Export and clipboard failures use `alert()`** (`export.ts`,
@@ -416,24 +428,18 @@ Robustness
       every tab in `#tabbar` is `tabIndex=0` where `role="tab"` wants a roving
       tabindex plus an `aria-controls` target, and `#divider` has no
       `role="separator"` or keyboard resize.
-- [ ] **Text-pane bracket keys ignore modifiers**: the textarea `keydown` handler
-      matches `e.key === "["` (and `]`, Backspace) without checking
-      Ctrl/Alt/Meta, so an OS or browser chord ending in `[` still wraps the
-      selection. It also never checks `isComposing`, which is worth auditing for
-      IME input.
 - [ ] **URL fragment churn**: `updateFragment` runs `history.replaceState` with
       the whole document on every edit, so large trees mean multi-KB URLs
       rewritten per keystroke. Debounce it; consider compressing the payload.
 - [ ] Extend the test suite: `make test` covers parser/serializer round-trips
-      (`test/roundtrip.test.mjs`, `test/multitree.test.mjs`) and the workspace
-      model (`test/tabs.test.mjs`), but `edit.ts`, `brackets.ts` and `keymap.ts`
-      are all pure and untested, and there's no Playwright smoke test in-repo
-      yet.
+      (`test/roundtrip.test.mjs`, `test/multitree.test.mjs`), the workspace
+      model (`test/tabs.test.mjs`) and the pure text-pane helpers
+      (`test/brackets.test.mjs`: bracket matching, matched-pair-at-caret, and the
+      diff/index-mapping pair), but `edit.ts` and `keymap.ts` are still untested,
+      and there's no Playwright smoke test in-repo yet (ad hoc runs against a
+      `make serve` build are how the fixes above were checked).
 
 Features
-- [ ] **Pretty-print button** for the text pane. `serializePretty` in
-      `serialize.ts` is already written and currently **unused** — it just needs
-      wiring to a toolbar/pane button.
 - [ ] **Export options**: PNG scale is hardcoded at 2×; add a scale control, a
       transparent-background option, and batch export of every tab.
 - [ ] **Font family picker.** `settings.label.fontFamily` exists with no UI, and
