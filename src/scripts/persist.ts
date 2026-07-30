@@ -162,6 +162,7 @@ export function savePrefs() {
     showTriangles: settings.showTriangles,
     autoSubscript: settings.autoSubscript,
     forestLayout: settings.forestLayout,
+    exportPrefs: settings.exportPrefs,
   };
   try {
     localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
@@ -218,4 +219,24 @@ export function loadPrefs() {
     settings.autoSubscript = p.autoSubscript;
   if (p.forestLayout === "row" || p.forestLayout === "column")
     settings.forestLayout = p.forestLayout;
+
+  // Export dialog state. Each field is checked against what the dialog can
+  // actually offer, so a corrupt blob can't preselect a scale that isn't in
+  // the dropdown (and then silently export at it).
+  const ep = p.exportPrefs;
+  if (typeof ep === "object" && ep !== null) {
+    const e = ep as Record<string, unknown>;
+    if (e.format === "png" || e.format === "svg" || e.format === "latex")
+      settings.exportPrefs.format = e.format;
+    if (e.scale === 0.5 || e.scale === 1 || e.scale === 2 || e.scale === 4)
+      settings.exportPrefs.scale = e.scale;
+    if (typeof e.transparent === "boolean")
+      settings.exportPrefs.transparent = e.transparent;
+    // "custom" deliberately isn't restored: the range it referred to belongs
+    // to whatever tab layout was open then, so it reopens on the current tab.
+    if (e.scope === "current" || e.scope === "all")
+      settings.exportPrefs.scope = e.scope;
+    if (typeof e.combineLatex === "boolean")
+      settings.exportPrefs.combineLatex = e.combineLatex;
+  }
 }

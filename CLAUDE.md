@@ -48,8 +48,9 @@ pnpm run watch  # rebuild + serve on change
   Deploy refuses a dirty `src/` (`ALLOW_DIRTY=1` overrides) — a build from
   uncommitted source can't be reproduced by that rebuild path.
 - `make test` runs the unit tests (`test/*.test.mjs`: `roundtrip` for one tree,
-  `multitree` for a whole document, `tabs` for the workspace model) on
-  Node's built-in runner — no test dependency. They build first and import from
+  `multitree` for a whole document, `movement` for arrow derivation, `tabs` for
+  the workspace model, `export-select` for the export dialog's tab-range and
+  filename logic) on Node's built-in runner — no test dependency. They build first and import from
   `dist/`; `test/dom-stub.mjs` fakes the canvas that `tree.ts` measures text
   with, so the notation is testable without a browser. Import it **before** any
   module that pulls in `tree.js` (`tabs.test.mjs` needs no stub — `tabs.ts`
@@ -68,12 +69,12 @@ Pure model/logic modules with one controller wiring them to the DOM.
 | `brackets.ts` | Pure, DOM-free helpers for the text pane: bracket matching (quote-aware — a `[` inside `"…"` is label text, not structure), matched-pair-at-caret detection, highlight-HTML building, and edit diff/position tracking. Unit-testable without a browser. |
 | `render.ts` | `Tree[]` → one `<svg>`. Two passes per tree (`layoutTree` positions, `drawTree` draws), then the boxes are composed onto one canvas — row or column per `settings.forestLayout`. Handles triangles, scripts, movement arrows, leaf alignment, bounding-box sizing. Tags each node group with `data-node-id`. |
 | `edit.ts` | Pure tree ops: add child/sibling (positional, each with a word-or-node choice), `toggleWordNode`, delete (promotes children), wrap, templates (X-bar, CP/TP, coordination), `linkNodes`/`nextSubscript` (movement-arrow tool), `applyAutoSubscripts` (auto-subscript display option), `reparent`, `isDescendant`. |
-| `export.ts` | Download SVG / PNG (SVG rasterized via canvas) / LaTeX `forest`, plus clipboard copy (PNG image, SVG markup, LaTeX). Takes the whole document (`Tree[]`) — an image carries every tree as laid out, LaTeX emits one `forest` environment per tree. Always draws with the light palette — see the export-colors note below. |
+| `export.ts` | File *builders*, not button handlers: `pngFile`/`svgFile`/`latexFile` turn a `Tree[]` into an `ExportFile` (blob + filename), `downloadFiles` saves a batch, `uniqueFilenames` de-duplicates tab names, and `copyPNG`/`copySVGImage`/`copySVGMarkup`/`copyLaTeX` write to the clipboard, and `clipboardImageSupported`/`clipboardTextSupported` feature-detect what the browser will accept. Each call takes one tab's trees — an image carries every tree of that tab as laid out, LaTeX emits one `forest` environment per tree. Always draws with the light palette — see the export-colors note below. |
 | `history.ts` | Undo/redo over document snapshots (bracket strings). One instance **per tab**. |
-| `tabs.ts` | `Workspace` model: an ordered list of named documents (`TabData` = id/name/`text` + an optional `draft`) + which is active. Pure model — no DOM, no history; add/insert/remove/duplicate/move/rename/switch and `toStored`/`fromStored`. `remove` returns the tab **and the index it sat at**, since putting one back also needs its undo history — which only the controller has, so the closed-tab stack lives there. |
+| `tabs.ts` | `Workspace` model: an ordered list of named documents (`TabData` = id/name/`text` + an optional `draft`) + which is active. Pure model — no DOM, no history; add/insert/remove/duplicate/move/rename/switch and `toStored`/`fromStored`. `remove` returns the tab **and the index it sat at**, since putting one back also needs its undo history — which only the controller has, so the closed-tab stack lives there. `parseTabSelection` ("1-3,5" → indices) lives here too — the export dialog's tab picker, kept beside the model it indexes into and testable without a DOM. |
 | `keymap.ts` | Single source of truth for keyboard shortcuts: the command list (id/label/default key/extra aliases), user remappings, canonical key encoding, and lookup. The help table and the remap UI are both rendered from it, so they can't drift. |
-| `persist.ts` | Autosave to localStorage + shareable URL fragment (`#t=`): the tab **workspace** (`saveWorkspace`/`loadWorkspace`, active doc mirrored to `#t=`), the theme, the display prefs (`savePrefs`/`loadPrefs`), the keymap overrides (`saveKeymap`/`loadKeymap`) and the compact toolbar's open category (`saveToolbarCat`/`loadToolbarCat`). `loadDoc` remains to migrate a legacy single-doc save into a tab on boot — **localStorage only**, since an incoming `#t=` is a shared document that gets its own tab rather than replacing what this browser holds; `saveDoc` is now **unused** (the workspace blob replaced it) and only kept as its counterpart. |
-| `settings.ts` | Layout/style constants, the three-way `leafAlignment`, how several trees of one document are arranged (`forestLayout`/`forestGap`), theme colors. `THEME_COLORS` + `applyThemeColors` are the single source for the light/dark drawing palette (used by both the theme toggle and the exporters) — with one gap: the **selected** label's color is hardcoded in `drawLabel` (`#0b2a4a`) and `settings.label.selectedColor` is not read by anything. |
+| `persist.ts` | Autosave to localStorage + shareable URL fragment (`#t=`): the tab **workspace** (`saveWorkspace`/`loadWorkspace`, active doc mirrored to `#t=`), the theme, the display prefs *and the export dialog's state* (`savePrefs`/`loadPrefs`), the keymap overrides (`saveKeymap`/`loadKeymap`) and the compact toolbar's open category (`saveToolbarCat`/`loadToolbarCat`). `loadDoc` remains to migrate a legacy single-doc save into a tab on boot — **localStorage only**, since an incoming `#t=` is a shared document that gets its own tab rather than replacing what this browser holds; `saveDoc` is now **unused** (the workspace blob replaced it) and only kept as its counterpart. |
+| `settings.ts` | Layout/style constants, the three-way `leafAlignment`, how several trees of one document are arranged (`forestLayout`/`forestGap`), the remembered `exportPrefs` (dialog state only — it draws nothing), theme colors. `THEME_COLORS` + `applyThemeColors` are the single source for the light/dark drawing palette (used by both the theme toggle and the exporters) — with one gap: the **selected** label's color is hardcoded in `drawLabel` (`#0b2a4a`) and `settings.label.selectedColor` is not read by anything. |
 | `toolbar.ts` | Compact (small-screen) toolbar: builds the category chip strip from the toolbar's own `.group[data-cat]` elements and shows one group at a time. Owns the `body.compact-toolbar` switch. |
 | `app.ts` | Controller. Owns the document's `trees` (+ which is active) and the `Workspace`, wires toolbar/keyboard/drag/text pane, tabs, zoom/pan, inline editing, theme. |
 | `main.ts` | Entry point: `startApp()`. |
@@ -254,6 +255,50 @@ Pure model/logic modules with one controller wiring them to the DOM.
     whichever node happened to be selected. `drawLabel` keeps the model's
     `isSelected` separate from the visual `selected`: ARIA and the roving
     tabindex read the former, only the drawing reads the latter.
+- **Exporting goes through one dialog** (`#export-modal`, the single ⭳ Export
+  button). It picks a *format* (PNG default / SVG / LaTeX), its options, and
+  *which tabs*, then ends in **Download** or **Copy to clipboard**. The rules
+  that aren't obvious from the markup:
+  - **Options are per format, and the dialog owns the switch.** `data-format`
+    rows are toggled by `syncExportUI`, not by CSS — scale (×0.5/×1/×2/×4) and
+    transparency are **PNG only**. SVG has no scale on purpose: it's vector, so
+    a scale factor would only set a default placement size, not fidelity.
+  - **One file per tab.** A tab is a document, so exporting several yields
+    several files — the trees of *different* tabs are never composed onto one
+    canvas the way the trees *within* a tab are. `downloadFiles` paces the
+    saves (~250ms apart) because browsers throttle, and Chrome blocks,
+    downloads fired back-to-back from one gesture.
+  - **LaTeX is the one format that can combine**, since a `.tex` is just text:
+    the combine checkbox appears only once **more than one** tab is selected
+    (with one tab it would be a no-op) and concatenates every tab's trees into
+    a single file named `syntax-trees.tex`.
+  - **Copy is single-item by nature.** The clipboard holds one thing, so
+    an image copy (PNG, or SVG-as-picture) is *disabled* once several tabs
+    are selected; a text copy (LaTeX, or SVG-as-markup) stays enabled and
+    concatenates instead, because pasting text has an obvious multi-tab
+    answer. `copySVGImage` puts `image/svg+xml` **and** a PNG in one
+    `ClipboardItem` so vector-aware apps keep it scalable and everything else
+    still pastes a picture — with a PNG-only retry, since browsers disagree
+    about which MIME types `write` accepts and one unsupported type rejects
+    the whole item.
+  - **SVG alone gets a three-way choice**: Download, Copy as Image, Copy as
+    Code — a vector can honestly be either, where PNG and LaTeX each have one
+    obvious clipboard meaning and keep a single generic Copy button.
+    `clipboardImageSupported()`/`clipboardTextSupported()` feature-detect
+    `ClipboardItem`/`navigator.clipboard` up front, so an unsupported copy
+    mode is *greyed out* with an inline explanation rather than failing at
+    click time — Firefox lacking image-clipboard support is the case this
+    exists for.
+  - **Filenames come from tab names**, sanitized, with repeats numbered from
+    the second occurrence (`dup.png`, `dup(2).png`) — two tabs may share a
+    name, but two downloads that share one overwrite each other.
+  - **A malformed custom range is refused, not trimmed.** `parseTabSelection`
+    returns `null` for anything out of range, reversed or unparseable, and the
+    dialog disables both buttons — exporting a silent subset of what was asked
+    for is the worse failure.
+  - The dialog's state (format/scale/transparency/scope/combine) persists with
+    the other display prefs; `custom` scope deliberately doesn't restore, since
+    the range referred to a tab layout that may no longer exist.
 - **Accessibility**: the SVG is an ARIA tree (`role="tree"` + `treeitem` groups
   with `aria-level`/`aria-selected`). There is deliberately **no `aria-expanded`**
   — nothing can collapse a subtree, so advertising that state would mislead
@@ -391,12 +436,6 @@ Pure model/logic modules with one controller wiring them to the DOM.
 (Completed work is documented in the sections above, not tracked here.)
 
 Bugs
-- [ ] **LaTeX export doesn't escape `\`, `^`, `[` or `]`.** `texEscape`
-      (`export.ts`) covers `&%$#_{}` and `~` only. Since the backslash stopped
-      being an escape character in the notation, `[N back\slash]` is now a legal
-      label and emits a raw control sequence; worse, `[N "[x]"]` emits `[[x]]`,
-      which breaks `forest`'s own bracket structure rather than merely mis-setting
-      a glyph. Needs `\textbackslash{}` / `\textasciicircum{}` and braced brackets.
 - [ ] **A command can be rebound onto a hardcoded key.** `rebind` only scans other
       `COMMANDS` entries, so binding one to `ArrowUp`, `Ctrl+z` or `Escape` is
       accepted and then dead — `app.ts` handles those before consulting the keymap
@@ -416,10 +455,6 @@ Bugs
       `extraKeys` alias, or fix the text.
 
 Robustness
-- [ ] **Export and clipboard failures use `alert()`** (`export.ts`,
-      `copy-*` actions), which the no-dialogs convention above rules out — in an
-      environment that suppresses dialogs a failed PNG export reports nothing at
-      all. Route them through `flashStatus` like every other message.
 - [ ] **Accessibility outside the SVG.** The tree itself is a proper ARIA tree,
       but its surroundings aren't: the modals are bare `<div class="modal">` (no
       `role="dialog"`/`aria-modal`, no focus trap, focus isn't restored on close),
@@ -433,21 +468,24 @@ Robustness
       rewritten per keystroke. Debounce it; consider compressing the payload.
 - [ ] Extend the test suite: `make test` covers parser/serializer round-trips
       (`test/roundtrip.test.mjs`, `test/multitree.test.mjs`), the workspace
-      model (`test/tabs.test.mjs`) and the pure text-pane helpers
+      model (`test/tabs.test.mjs`), the pure text-pane helpers
       (`test/brackets.test.mjs`: bracket matching, matched-pair-at-caret, and the
-      diff/index-mapping pair), but `edit.ts` and `keymap.ts` are still untested,
-      and there's no Playwright smoke test in-repo yet (ad hoc runs against a
-      `make serve` build are how the fixes above were checked).
+      diff/index-mapping pair) and the export dialog's pure parts
+      (`test/export-select.test.mjs`), but `edit.ts` and `keymap.ts` are still
+      untested, and there's no Playwright smoke test in-repo yet (ad hoc runs
+      against a `make serve` build are how the fixes above were checked).
 
 Features
-- [ ] **Export options**: PNG scale is hardcoded at 2×; add a scale control, a
-      transparent-background option, and batch export of every tab.
+- [ ] **Export options still missing**: the dialog covers scale, transparency
+      and tab selection, but not a ZIP for a many-tab export (N separate saves
+      is clumsy past a handful) or a page-size/margin control for the PDF-ish
+      workflows people use the SVG for.
 - [ ] **Font family picker.** `settings.label.fontFamily` exists with no UI, and
       font choice matters for publication figures.
 - [ ] **Toolbar actions with no `COMMANDS` entry** (`coordination`,
       `paste-before`, `toggle-align`, `toggle-boxes`, `toggle-triangles`,
-      `toggle-theme`, `new-tab`) have no key and therefore no row in the help
-      table — the table only renders `FIXED_KEYS` + `COMMANDS`. Give them
+      `toggle-theme`, `new-tab`, `export`) have no key and therefore no row in
+      the help table — the table only renders `FIXED_KEYS` + `COMMANDS`. Give them
       entries, or render the keyless actions too so Coord/Paste ◀ stop being
       invisible to keyboard users.
 - [ ] **Settings inputs validate looser than they advertise**: the markup carries

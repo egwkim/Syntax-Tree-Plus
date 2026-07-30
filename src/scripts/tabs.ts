@@ -215,3 +215,34 @@ export class Workspace {
     return ws;
   }
 }
+
+/**
+ * Parse a 1-based tab range spec — `"1-3,5"` → `[0, 1, 2, 4]` — into zero-based
+ * indices into the workspace's tab order.
+ *
+ * Pure and total: anything malformed or out of range returns `null` rather than
+ * a partial list, so the export dialog refuses the range outright instead of
+ * silently exporting a subset the user didn't ask for. Duplicates collapse and
+ * the spec's own order is preserved, so `"3,1"` exports tab 3 then tab 1.
+ */
+export function parseTabSelection(spec: string, count: number): number[] | null {
+  if (spec.trim() === "") return null;
+  const out: number[] = [];
+  const seen = new Set<number>();
+  for (const raw of spec.split(",")) {
+    const part = raw.trim();
+    const m = /^(\d+)(?:\s*-\s*(\d+))?$/.exec(part);
+    if (!m) return null;
+    const start = Number(m[1]);
+    const end = m[2] === undefined ? start : Number(m[2]);
+    // A reversed range ("5-3") is a typo, not an instruction to count down.
+    if (start > end) return null;
+    if (start < 1 || end > count) return null;
+    for (let i = start; i <= end; i++) {
+      if (seen.has(i)) continue;
+      seen.add(i);
+      out.push(i - 1);
+    }
+  }
+  return out;
+}

@@ -4,7 +4,7 @@ import { settings, applyThemeColors, LeafAlignment } from "./settings.js";
 import { parseAll, parseLabel } from "./parser.js";
 import { serializeAll, serializePretty } from "./serialize.js";
 import { History } from "./history.js";
-import { Workspace, type TabData } from "./tabs.js";
+import { Workspace, parseTabSelection, type TabData } from "./tabs.js";
 import { setupCompactToolbar } from "./toolbar.js";
 import {
   COMMANDS,
@@ -32,12 +32,19 @@ import {
   loadKeymap,
 } from "./persist.js";
 import {
-  exportSVG,
-  exportPNG,
-  exportLaTeX,
-  copyImagePNG,
+  type ExportFormat,
+  type ExportFile,
+  pngFile,
+  svgFile,
+  latexFile,
+  downloadFiles,
+  uniqueFilenames,
+  copyPNG,
+  copySVGImage,
   copySVGMarkup,
   copyLaTeX,
+  clipboardImageSupported,
+  clipboardTextSupported,
 } from "./export.js";
 import {
   matchBrackets,
@@ -76,6 +83,7 @@ export function startApp() {
   const toolbar = document.getElementById("toolbar") as HTMLElement;
   const helpModal = document.getElementById("help-modal") as HTMLElement;
   const settingsModal = document.getElementById("settings-modal") as HTMLElement;
+  const exportModal = document.getElementById("export-modal") as HTMLElement;
   const fontSizeInput = document.getElementById("setting-font-size") as HTMLInputElement;
   const hSpacingInput = document.getElementById("setting-h-spacing") as HTMLInputElement;
   const vSpacingInput = document.getElementById("setting-v-spacing") as HTMLInputElement;
@@ -903,26 +911,17 @@ export function startApp() {
       const state = historyStack.redo();
       if (state !== null) restoreFromHistory(state);
     },
-    // Exports cover the whole document — every tree in the tab, laid out the
-    // way the canvas shows them.
-    "export-svg": () => exportSVG(trees),
-    "export-png": () => exportPNG(trees),
-    "export-latex": () => exportLaTeX(trees),
-    "copy-png-image": () => {
-      copyImagePNG(trees)
-        .then(() => flashStatus("Copied image"))
-        .catch((err: Error) => alert(err.message || "Couldn't copy the image."));
+    export() {
+      openExport();
     },
-    "copy-svg-markup": () => {
-      copySVGMarkup(trees)
-        .then(() => flashStatus("Copied SVG"))
-        .catch((err: Error) => alert(err.message || "Couldn't copy the SVG."));
+    "close-export"() {
+      exportModal.classList.remove("active");
     },
-    "copy-latex": () => {
-      copyLaTeX(trees)
-        .then(() => flashStatus("Copied LaTeX"))
-        .catch((err: Error) => alert(err.message || "Couldn't copy the LaTeX."));
-    },
+    "export-download": () => runExport("download"),
+    "export-copy": () =>
+      runExport(currentExportFormat() === "latex" ? "copy-code" : "copy-image"),
+    "export-copy-image": () => runExport("copy-image"),
+    "export-copy-code": () => runExport("copy-code"),
     "toggle-align"() {
       // Cycle the three jsSyntaxTree alignment modes.
       const order: LeafAlignment[] = ["top", "words", "bottom"];
@@ -1449,11 +1448,13 @@ export function startApp() {
     if (
       e.key === "Escape" &&
       (helpModal.classList.contains("active") ||
-        settingsModal.classList.contains("active"))
+        settingsModal.classList.contains("active") ||
+        exportModal.classList.contains("active"))
     ) {
       e.preventDefault();
       helpModal.classList.remove("active");
       settingsModal.classList.remove("active");
+      exportModal.classList.remove("active");
       return;
     }
     if (typing) return; // don't hijack while editing text
@@ -1571,6 +1572,291 @@ export function startApp() {
   window.addEventListener("resize", () => {
     syncScroll();
     if (tree) renderTree();
+  });
+
+  // ---- export dialog --------------------------------------------------
+
+  const exportFormatInputs = () =>
+    Array.from(
+      exportModal.querySelectorAll<HTMLInputElement>('input[name="export-format"]'),
+    );
+  const exportScopeInputs = () =>
+    Array.from(
+      exportModal.querySelectorAll<HTMLInputElement>('input[name="export-scope"]'),
+    );
+  const exportScaleSel = () =>
+    document.getElementById("export-scale") as HTMLSelectElement;
+  const exportTransparentBox = () =>
+    document.getElementById("export-transparent") as HTMLInputElement;
+  const exportCombineBox = () =>
+    document.getElementById("export-combine") as HTMLInputElement;
+  const exportCustomInput = () =>
+    document.getElementById("export-custom") as HTMLInputElement;
+  const exportErrorEl = () => document.getElementById("export-error") as HTMLElement;
+  const exportSummaryEl = () =>
+    document.getElementById("export-summary") as HTMLElement;
+  const exportDownloadBtn = () =>
+    document.getElementById("export-download") as HTMLButtonElement;
+  const exportCopyBtn = () =>
+    document.getElementById("export-copy") as HTMLButtonElement;
+  const exportCopyImageBtn = () =>
+    document.getElementById("export-copy-image") as HTMLButtonElement;
+  const exportCopyCodeBtn = () =>
+    document.getElementById("export-copy-code") as HTMLButtonElement;
+  const exportCopyNoteEl = () =>
+    document.getElementById("export-copy-note") as HTMLElement;
+
+  function currentExportFormat(): ExportFormat {
+    const picked = exportFormatInputs().find((i) => i.checked);
+    return (picked?.value as ExportFormat) ?? "png";
+  }
+
+  function currentExportScope(): "current" | "all" | "custom" {
+    const picked = exportScopeInputs().find((i) => i.checked);
+    return (picked?.value as "current" | "all" | "custom") ?? "current";
+  }
+
+  /**
+   * Which tabs the dialog is currently pointing at, as indices into
+   * `workspace.tabs`. `null` means the custom range is malformed — the caller
+   * refuses the export rather than guessing at a subset.
+   */
+  function selectedTabIndices(): number[] | null {
+    const scope = currentExportScope();
+    if (scope === "all") return workspace.tabs.map((_, i) => i);
+    if (scope === "custom")
+      return parseTabSelection(exportCustomInput().value, workspace.tabs.length);
+    return [workspace.indexOf(workspace.activeId)];
+  }
+
+  /**
+   * The trees for one tab. The active tab is read from the live `trees` so an
+   * unsaved GUI edit exports as shown; every other tab is parsed from its own
+   * stored document.
+   */
+  function treesForTab(index: number): Tree[] {
+    const tab = workspace.tabs[index];
+    if (!tab) return [];
+    if (tab.id === workspace.activeId) return trees;
+    return parseAll(tab.text).trees;
+  }
+
+  /**
+   * Re-run the dialog's conditional UI: which option rows apply to the chosen
+   * format, whether the custom range is usable, and which buttons that leaves
+   * live. Clipboard holds exactly one item, so a multi-tab image export can be
+   * downloaded but not copied.
+   */
+  /**
+   * SVG gets a three-way choice (Download / Copy as image / Copy as code)
+   * since a vector can honestly be either; PNG and LaTeX each have one obvious
+   * clipboard meaning, so they keep the single generic Copy button.
+   */
+  function syncExportCopyButtons(format: ExportFormat, count: number) {
+    exportCopyBtn().classList.toggle("shown", format !== "svg");
+    exportCopyImageBtn().classList.toggle("shown", format === "svg");
+    exportCopyCodeBtn().classList.toggle("shown", format === "svg");
+
+    const imageOk = clipboardImageSupported();
+    const textOk = clipboardTextSupported();
+    const multiTabTitle = "The clipboard holds one image — select a single tab to copy.";
+    const noImageTitle = "This browser can't copy images to the clipboard.";
+    const noTextTitle = "This browser can't copy text to the clipboard.";
+
+    if (format === "svg") {
+      exportCopyImageBtn().disabled = count !== 1 || !imageOk;
+      exportCopyImageBtn().title = !imageOk ? noImageTitle : count > 1 ? multiTabTitle : "";
+      exportCopyCodeBtn().disabled = count === 0 || !textOk;
+      exportCopyCodeBtn().title = !textOk ? noTextTitle : "";
+    } else if (format === "png") {
+      exportCopyBtn().disabled = count !== 1 || !imageOk;
+      exportCopyBtn().title = !imageOk ? noImageTitle : count > 1 ? multiTabTitle : "";
+    } else {
+      // LaTeX copies as text, so several tabs still concatenate into one paste.
+      exportCopyBtn().disabled = count === 0 || !textOk;
+      exportCopyBtn().title = !textOk ? noTextTitle : "";
+    }
+
+    const notes: string[] = [];
+    if (!imageOk && (format === "png" || format === "svg")) {
+      notes.push("This browser doesn't support copying images to the clipboard.");
+    }
+    if (!textOk && (format === "latex" || format === "svg")) {
+      notes.push("This browser doesn't support copying text to the clipboard.");
+    }
+    exportCopyNoteEl().textContent = notes.join(" ");
+  }
+
+  function syncExportUI() {
+    const format = currentExportFormat();
+    const scope = currentExportScope();
+
+    for (const row of exportModal.querySelectorAll<HTMLElement>("[data-format]")) {
+      row.classList.toggle("shown", row.dataset.format === format);
+    }
+    exportCustomInput().style.display = scope === "custom" ? "" : "none";
+
+    const picked = selectedTabIndices();
+    const count = picked?.length ?? 0;
+    const err = exportErrorEl();
+    const summary = exportSummaryEl();
+
+    // One tab is one .tex either way, so the combine choice only means
+    // something once there are several to combine.
+    document
+      .getElementById("export-combine-row")
+      ?.classList.toggle("shown", format === "latex" && count > 1);
+
+    if (scope === "custom" && picked === null) {
+      err.textContent =
+        workspace.tabs.length === 1
+          ? "Enter tab 1 (this workspace has one tab)."
+          : `Enter tabs as a range like 1-${workspace.tabs.length}, or 1,3.`;
+      summary.textContent = "";
+      exportDownloadBtn().disabled = true;
+      syncExportCopyButtons(format, 0);
+      return;
+    }
+    err.textContent = "";
+
+    // One .tex can hold every tab's trees; images can't, so those go one file
+    // per tab and the combine checkbox only means anything for LaTeX.
+    const combined = format === "latex" && exportCombineBox().checked;
+    const fileCount = combined ? 1 : count;
+    const ext = format === "latex" ? "tex" : format;
+    summary.textContent =
+      count === 0
+        ? "No tabs selected."
+        : `${count} tab${count === 1 ? "" : "s"} → ${fileCount} ${ext.toUpperCase()} file${
+            fileCount === 1 ? "" : "s"
+          }.`;
+
+    exportDownloadBtn().disabled = count === 0;
+    syncExportCopyButtons(format, count);
+  }
+
+  /** Push the remembered dialog state into the inputs. */
+  function syncExportInputs() {
+    const p = settings.exportPrefs;
+    for (const i of exportFormatInputs()) i.checked = i.value === p.format;
+    for (const i of exportScopeInputs()) i.checked = i.value === p.scope;
+    exportScaleSel().value = String(p.scale);
+    exportTransparentBox().checked = p.transparent;
+    exportCombineBox().checked = p.combineLatex;
+  }
+
+  /** Remember the dialog state so the next export starts where this one left off. */
+  function persistExportPrefs() {
+    settings.exportPrefs = {
+      format: currentExportFormat(),
+      scale: parseFloat(exportScaleSel().value) || 1,
+      transparent: exportTransparentBox().checked,
+      scope: currentExportScope(),
+      combineLatex: exportCombineBox().checked,
+    };
+    savePrefs();
+  }
+
+  function openExport() {
+    // The pane may hold edits the tab doesn't have yet; park them so a
+    // "current tab" export matches what's on screen and other tabs read clean.
+    flushActiveText();
+    syncExportInputs();
+    if (currentExportScope() === "custom" && !exportCustomInput().value.trim()) {
+      exportCustomInput().value = String(workspace.indexOf(workspace.activeId) + 1);
+    }
+    syncExportUI();
+    exportModal.classList.add("active");
+  }
+
+  /** Build the files the current dialog state describes. */
+  async function buildExportFiles(indices: number[]): Promise<ExportFile[]> {
+    const format = currentExportFormat();
+    const scale = parseFloat(exportScaleSel().value) || 1;
+    const transparent = exportTransparentBox().checked;
+    const names = indices.map((i) => workspace.tabs[i]?.name ?? "syntax-tree");
+
+    if (format === "latex" && exportCombineBox().checked) {
+      const all = indices.flatMap((i) => treesForTab(i));
+      // A combined file spans several tabs, so no single tab name fits it.
+      const name = indices.length === 1 ? names[0] : "syntax-trees";
+      return [latexFile(all, uniqueFilenames([name], "tex")[0])];
+    }
+
+    const ext = format === "latex" ? "tex" : format;
+    const filenames = uniqueFilenames(names, ext);
+    const files: ExportFile[] = [];
+    for (let k = 0; k < indices.length; k++) {
+      const t = treesForTab(indices[k]);
+      if (format === "png") files.push(await pngFile(t, filenames[k], scale, transparent));
+      else if (format === "svg") files.push(svgFile(t, filenames[k]));
+      else files.push(latexFile(t, filenames[k]));
+    }
+    return files;
+  }
+
+  async function runExport(mode: "download" | "copy-image" | "copy-code") {
+    const indices = selectedTabIndices();
+    if (!indices || indices.length === 0) {
+      syncExportUI();
+      return;
+    }
+    const format = currentExportFormat();
+    try {
+      if (mode === "copy-image") {
+        // Single-item by nature — the dialog only enables this with one tab
+        // selected, whichever format it's copying (PNG, or SVG-as-picture).
+        if (format === "svg") {
+          await copySVGImage(treesForTab(indices[0]));
+          flashStatus("Copied image");
+        } else {
+          const scale = parseFloat(exportScaleSel().value) || 1;
+          await copyPNG(treesForTab(indices[0]), scale, exportTransparentBox().checked);
+          flashStatus("Copied image");
+        }
+        exportModal.classList.remove("active");
+        return;
+      }
+      if (mode === "copy-code") {
+        // Text has an obvious multi-tab answer (concatenate), so this runs
+        // over every selected tab regardless of count.
+        if (format === "svg") {
+          await copySVGMarkup(indices.map((i) => treesForTab(i)));
+          flashStatus("Copied SVG markup");
+        } else {
+          await copyLaTeX(indices.flatMap((i) => treesForTab(i)));
+          flashStatus("Copied LaTeX");
+        }
+        exportModal.classList.remove("active");
+        return;
+      }
+      const files = await buildExportFiles(indices);
+      await downloadFiles(files);
+      flashStatus(
+        files.length === 1 ? `Saved ${files[0].filename}` : `Saved ${files.length} files`,
+      );
+      exportModal.classList.remove("active");
+    } catch (err) {
+      exportErrorEl().textContent =
+        (err as Error)?.message || "The export failed. Try another format.";
+    }
+  }
+
+  exportModal.addEventListener("change", () => {
+    persistExportPrefs();
+    syncExportUI();
+  });
+  exportModal.addEventListener("input", (e) => {
+    if ((e.target as HTMLElement).id === "export-custom") syncExportUI();
+  });
+  exportModal.addEventListener("click", (e) => {
+    if (e.target === exportModal) {
+      exportModal.classList.remove("active");
+      return;
+    }
+    const btn = (e.target as Element).closest("button");
+    const action = btn?.getAttribute("data-action");
+    if (action && actions[action]) actions[action]();
   });
 
   // ---- tabs (multiple named trees) -----------------------------------

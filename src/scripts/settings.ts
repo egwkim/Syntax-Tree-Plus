@@ -12,6 +12,10 @@ export type EdgeStyle = "straight" | "curved";
 export type ThemeName = "light" | "dark";
 /** How several trees in one document are arranged on the canvas. */
 export type ForestLayout = "row" | "column";
+/** What an export writes: a raster, a vector, or `forest` source. */
+export type ExportFormat = "png" | "svg" | "latex";
+/** Which tabs an export covers. */
+export type ExportScope = "current" | "all" | "custom";
 
 export const settings = {
   node: {
@@ -64,6 +68,16 @@ export const settings = {
   forestLayout: "row" as ForestLayout,
   // Blank space between two trees of the same document.
   forestGap: 56,
+  // Last state of the export dialog, remembered so a repeated export (the
+  // common case while writing a paper) doesn't have to be re-configured.
+  // Purely dialog state — it doesn't affect what's drawn on the canvas.
+  exportPrefs: {
+    format: "png" as ExportFormat,
+    scale: 1,
+    transparent: false,
+    scope: "current" as ExportScope,
+    combineLatex: true,
+  },
 };
 
 export type Settings = typeof settings;

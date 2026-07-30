@@ -47,6 +47,14 @@ export function svgString(trees: Tree[]): {
   });
 }
 
+export type { ExportFormat } from "./settings.js";
+
+/** One file the export dialog is about to hand to the browser. */
+export interface ExportFile {
+  blob: Blob;
+  filename: string;
+}
+
 function triggerDownload(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -58,8 +66,16 @@ function triggerDownload(blob: Blob, filename: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-/** Rasterize the document's SVG to a PNG blob (shared by download and clipboard copy). */
-function renderPNGBlob(trees: Tree[], scale = 2): Promise<Blob> {
+/**
+ * Rasterize the document's SVG to a PNG blob (shared by download and clipboard
+ * copy). `transparent` skips the white backdrop, leaving the canvas alpha
+ * intact for figures that sit on a colored background.
+ */
+function renderPNGBlob(
+  trees: Tree[],
+  scale = 1,
+  transparent = false,
+): Promise<Blob> {
   const { xml, width, height } = svgString(trees);
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -69,8 +85,10 @@ function renderPNGBlob(trees: Tree[], scale = 2): Promise<Blob> {
       canvas.width = Math.ceil(width * scale);
       canvas.height = Math.ceil(height * scale);
       const ctx = canvas.getContext("2d")!;
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      if (!transparent) {
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
       ctx.scale(scale, scale);
       ctx.drawImage(img, 0, 0);
       canvas.toBlob((blob) => {
@@ -83,42 +101,162 @@ function renderPNGBlob(trees: Tree[], scale = 2): Promise<Blob> {
   });
 }
 
-export function exportSVG(trees: Tree[], filename = "syntax-tree.svg") {
-  const { xml } = svgString(trees);
-  triggerDownload(new Blob([xml], { type: "image/svg+xml" }), filename);
-}
-
-export function exportPNG(trees: Tree[], filename = "syntax-tree.png", scale = 2) {
-  renderPNGBlob(trees, scale)
-    .then((blob) => triggerDownload(blob, filename))
-    .catch(() => alert("PNG export failed while rasterizing the SVG."));
+/**
+ * Strip what a filesystem won't take from a tab name. Tabs are named freely,
+ * but the name becomes a download filename, so path separators and the
+ * characters Windows reserves have to go.
+ */
+function sanitizeFilename(name: string): string {
+  const cleaned = name
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^\.+/, "");
+  return cleaned || "syntax-tree";
 }
 
 /**
- * Copy the tree(s) as a raster image to the system clipboard (PNG is the one
- * image MIME type browsers reliably accept for `ClipboardItem`), so it can be
- * pasted directly into documents/chat without a download step.
+ * Turn tab names into distinct filenames. Nothing stops two tabs sharing a
+ * name, but two downloads that share one overwrite each other (or get numbered
+ * by the browser, which isn't the user's choice), so repeats are numbered from
+ * the second occurrence on: `tree.png`, `tree(2).png`, `tree(3).png`.
  */
-export async function copyImagePNG(trees: Tree[], scale = 2): Promise<void> {
-  if (!navigator.clipboard || typeof ClipboardItem === "undefined") {
+export function uniqueFilenames(names: string[], ext: string): string[] {
+  const used = new Map<string, number>();
+  return names.map((raw) => {
+    const base = sanitizeFilename(raw);
+    const n = (used.get(base) ?? 0) + 1;
+    used.set(base, n);
+    return (n === 1 ? base : `${base}(${n})`) + "." + ext;
+  });
+}
+
+/** Build one tab's PNG. */
+export async function pngFile(
+  trees: Tree[],
+  filename: string,
+  scale = 1,
+  transparent = false,
+): Promise<ExportFile> {
+  return { blob: await renderPNGBlob(trees, scale, transparent), filename };
+}
+
+/** Build one tab's SVG. Vector output, so there is no scale to apply. */
+export function svgFile(trees: Tree[], filename: string): ExportFile {
+  const { xml } = svgString(trees);
+  return { blob: new Blob([xml], { type: "image/svg+xml" }), filename };
+}
+
+/** Build one `.tex` from whatever trees it's handed (one tab, or all of them). */
+export function latexFile(trees: Tree[], filename: string): ExportFile {
+  return {
+    blob: new Blob([toForest(trees)], { type: "text/plain" }),
+    filename,
+  };
+}
+
+/**
+ * Save every file, spaced out. Browsers throttle — and Chrome outright blocks —
+ * downloads fired back-to-back from one gesture, so a multi-tab export has to
+ * pace itself or silently lose files after the first few.
+ */
+export async function downloadFiles(files: ExportFile[]): Promise<void> {
+  for (let i = 0; i < files.length; i++) {
+    if (i > 0) {
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    triggerDownload(files[i].blob, files[i].filename);
+  }
+}
+
+/**
+ * Whether this browser can accept an image on the system clipboard at all
+ * (`ClipboardItem` is still missing in some browsers/insecure contexts). The
+ * export dialog checks this up front so it can grey the button out with an
+ * explanation instead of letting the user hit a rejected promise.
+ */
+export function clipboardImageSupported(): boolean {
+  return !!(navigator.clipboard && typeof ClipboardItem !== "undefined");
+}
+
+/** Whether this browser can put plain text on the system clipboard. */
+export function clipboardTextSupported(): boolean {
+  return !!(navigator.clipboard && typeof navigator.clipboard.writeText === "function");
+}
+
+function requireClipboardImage() {
+  if (!clipboardImageSupported()) {
     throw new Error("Clipboard image copy isn't supported in this browser.");
   }
-  const blob = await renderPNGBlob(trees, scale);
+}
+
+/**
+ * Copy the tree(s) as a raster image to the system clipboard, so they can be
+ * pasted straight into a document or chat without a download step.
+ */
+export async function copyPNG(
+  trees: Tree[],
+  scale = 1,
+  transparent = false,
+): Promise<void> {
+  requireClipboardImage();
+  const blob = await renderPNGBlob(trees, scale, transparent);
   await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
 }
 
-/** Copy the document's raw SVG markup to the clipboard as text. */
-export async function copySVGMarkup(trees: Tree[]): Promise<void> {
-  if (!navigator.clipboard) {
-    throw new Error("Clipboard access isn't available in this browser.");
-  }
+/**
+ * Copy the tree(s) as an *image* rather than as markup: the vector goes on the
+ * clipboard with a raster alongside it, so an app that understands SVG keeps
+ * the figure scalable and everything else still gets a picture.
+ *
+ * Browsers disagree about which MIME types `write` accepts, and one unsupported
+ * type rejects the whole item — hence the PNG-only retry.
+ */
+export async function copySVGImage(trees: Tree[]): Promise<void> {
+  requireClipboardImage();
   const { xml } = svgString(trees);
-  await navigator.clipboard.writeText(xml);
+  const svg = new Blob([xml], { type: "image/svg+xml" });
+  const png = await renderPNGBlob(trees, 1, false);
+  try {
+    await navigator.clipboard.write([
+      new ClipboardItem({ "image/svg+xml": svg, "image/png": png }),
+    ]);
+  } catch {
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
+  }
 }
 
-/** Escape text for LaTeX. */
+/**
+ * Copy the raw SVG markup as text — one `<svg>` per tab, blank-line separated.
+ * Unlike the image copy this has an obvious multi-tab answer (concatenated
+ * text, the same call `copyLaTeX` makes), so the dialog allows it regardless
+ * of how many tabs are selected.
+ */
+export async function copySVGMarkup(perTab: Tree[][]): Promise<void> {
+  if (!clipboardTextSupported()) {
+    throw new Error("Clipboard access isn't available in this browser.");
+  }
+  const combined = perTab.map((trees) => svgString(trees).xml).join("\n\n");
+  await navigator.clipboard.writeText(combined);
+}
+
+/**
+ * Escape text for LaTeX. Backslashes are swapped for a placeholder first so
+ * the `\` inserted by the other replacements (e.g. `_` -> `\_`) isn't itself
+ * re-escaped; `[`/`]` are brace-wrapped rather than escaped since `forest`
+ * reads bare brackets as tree structure, not glyphs.
+ */
+const BACKSLASH_PLACEHOLDER = "\u0000";
+
 function texEscape(s: string): string {
-  return s.replace(/([&%$#_{}])/g, "\\$1").replace(/~/g, "\\textasciitilde ");
+  return s
+    .replace(/\\/g, BACKSLASH_PLACEHOLDER)
+    .replace(/([&%$#_{}])/g, "\\$1")
+    .replace(/~/g, "\\textasciitilde ")
+    .replace(/\^/g, "\\textasciicircum{}")
+    .replace(/\[/g, "{[}")
+    .replace(/\]/g, "{]}")
+    .replace(new RegExp(BACKSLASH_PLACEHOLDER, "g"), "\\textbackslash{}");
 }
 
 function scriptSuffix(node: Node): string {
@@ -171,14 +309,9 @@ export function toForest(trees: Tree[]): string {
   return trees.map(treeToForest).join("\n\n");
 }
 
-export function exportLaTeX(trees: Tree[], filename = "syntax-tree.tex") {
-  const code = toForest(trees);
-  triggerDownload(new Blob([code], { type: "text/plain" }), filename);
-}
-
 /** Copy the `forest` LaTeX source to the clipboard (no download step). */
 export async function copyLaTeX(trees: Tree[]): Promise<void> {
-  if (!navigator.clipboard) {
+  if (!clipboardTextSupported()) {
     throw new Error("Clipboard access isn't available in this browser.");
   }
   await navigator.clipboard.writeText(toForest(trees));

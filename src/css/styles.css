@@ -535,7 +535,13 @@ body.link-mode #tree-container [data-node-id] {
 /* Sticky title row so the × stays reachable however far the panel is scrolled.
    Negative margins pull it out to the body's padding edges; the matching
    padding keeps the text where it was, and top: 0 then pins it to the
-   scrollport's top edge with its own background hiding the content behind. */
+   scrollport's top edge with its own background hiding the content behind.
+
+   The bottom margin pays back the -24px at the top: without it the row's
+   painted box ends 24px below where flow thinks it does, so the next element
+   starts *underneath* the opaque background and loses its top 10px. That was
+   invisible while every panel opened on a tall first row, and clips anything
+   shorter (the export panel's section legends). */
 .modal-head {
   position: sticky;
   top: 0;
@@ -544,7 +550,7 @@ body.link-mode #tree-container [data-node-id] {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin: -24px -28px 0;
+  margin: -24px -28px 24px;
   padding: 24px 28px 8px;
   background: var(--bg);
 }
@@ -606,6 +612,104 @@ body.link-mode #tree-container [data-node-id] {
   color: #fff;
   cursor: pointer;
   font-size: 14px;
+}
+
+/* ---- Export panel ---- */
+.export-section {
+  margin-top: 14px;
+}
+.export-legend {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.export-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+.export-choices label,
+.export-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.export-opts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+}
+.export-opts label {
+  font-size: 14px;
+}
+#export-custom {
+  margin-top: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+}
+/* Format-specific rows are shown by JS, which owns the format switch. */
+.export-section[data-format] {
+  display: none;
+}
+.export-section[data-format].shown {
+  display: block;
+}
+.export-error {
+  min-height: 1.2em;
+  margin-top: 8px;
+  color: var(--danger);
+  font-size: 13px;
+}
+.export-note {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.export-note:empty {
+  display: none;
+}
+.export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+.export-actions button {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  font-size: 14px;
+}
+.export-actions button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+/* Which copy button applies depends on format (`syncExportCopyButtons`):
+   PNG/LaTeX keep the one generic Copy button; SVG swaps it for two specific
+   ones, since a vector can honestly be copied as either an image or markup. */
+#export-copy,
+#export-copy-image,
+#export-copy-code {
+  display: none;
+}
+#export-copy.shown,
+#export-copy-image.shown,
+#export-copy-code.shown {
+  display: inline-block;
 }
 
 /* ---- Settings panel ---- */

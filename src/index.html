@@ -74,16 +74,8 @@
         <button data-action="pretty-print" title="Reformat the bracket notation pane across multiple indented lines (Shift+P)">¶ Pretty-print</button>
       </div>
 
-      <div class="group" data-cat="export" data-cat-label="Export" data-cat-icon="⭳">
-        <button data-action="export-svg" title="Download SVG">SVG</button>
-        <button data-action="export-png" title="Download PNG">PNG</button>
-        <button data-action="export-latex" title="Download LaTeX (forest)">LaTeX</button>
-        <button data-action="copy-png-image" title="Copy tree image to the clipboard (PNG)">⧉ Copy PNG</button>
-        <button data-action="copy-svg-markup" title="Copy SVG markup to the clipboard">⧉ Copy SVG</button>
-        <button data-action="copy-latex" title="Copy LaTeX (forest) source to the clipboard">⧉ Copy LaTeX</button>
-      </div>
-
       <div class="group quick right">
+        <button data-action="export" title="Export (download or copy)">⭳<span class="lbl"> Export</span></button>
         <button data-action="settings" title="Settings">⚙<span class="lbl"> Settings</span></button>
         <button data-action="help" title="Keyboard shortcuts">?<span class="lbl"> Help</span></button>
       </div>
@@ -245,9 +237,9 @@
             <strong>On a phone:</strong> the toolbar collapses to a row of
             category chips — <em>Insert</em>, <em>Edit</em>,
             <em>Clipboard</em>, <em>Templates</em>, <em>Tools</em>,
-            <em>View</em>, <em>Export</em>. Tap one to show just those buttons;
-            tap it again to hide the row and give the screen back to the tree.
-            Undo/redo and Settings/Help stay put.
+            <em>View</em>. Tap one to show just those buttons; tap it again to
+            hide the row and give the screen back to the tree. Undo/redo and
+            Export/Settings/Help stay put.
           </li>
           <li>
             <strong>Zoom &amp; pan:</strong> use the ＋ / － / Fit buttons (or
@@ -255,12 +247,103 @@
             <code>Ctrl</code>/<code>⌘</code>+scroll to zoom toward the pointer,
             and drag empty canvas to pan.
           </li>
+          <li>
+            <strong>Export:</strong> ⭳ Export opens one dialog — pick PNG, SVG
+            or LaTeX, then download or copy to the clipboard. PNG adds a scale
+            and a transparent-background option; you can export the current
+            tab, all of them, or a range like <code>1-3,5</code>. Several tabs
+            save as one file each, named after the tab; LaTeX can instead
+            combine them into a single <code>.tex</code>.
+          </li>
         </ul>
         <p class="tip">
           Tip: when renaming, type the full token including scripts, e.g.
           <code>DP_1</code> or <code>C^0</code>.
         </p>
         <button data-action="close-help">Close</button>
+      </div>
+    </div>
+
+    <div id="export-modal" class="modal">
+      <div class="modal-body">
+        <div class="modal-head">
+          <h2>Export</h2>
+          <button
+            type="button"
+            class="modal-close"
+            data-action="close-export"
+            title="Close"
+            aria-label="Close export"
+          >
+            ×
+          </button>
+        </div>
+
+        <div class="export-section">
+          <span class="export-legend">Format</span>
+          <div class="export-choices" id="export-format">
+            <label><input type="radio" name="export-format" value="png" checked /> PNG</label>
+            <label><input type="radio" name="export-format" value="svg" /> SVG</label>
+            <label><input type="radio" name="export-format" value="latex" /> LaTeX</label>
+          </div>
+        </div>
+
+        <div class="export-section" data-format="png">
+          <span class="export-legend">Options</span>
+          <div class="export-opts">
+            <label for="export-scale">Scale</label>
+            <select id="export-scale">
+              <option value="0.5">×0.5</option>
+              <option value="1" selected>×1</option>
+              <option value="2">×2</option>
+              <option value="4">×4</option>
+            </select>
+            <label class="export-check">
+              <input type="checkbox" id="export-transparent" /> Transparent background
+            </label>
+          </div>
+        </div>
+
+        <div class="export-section">
+          <span class="export-legend">Tabs</span>
+          <div class="export-choices" id="export-scope">
+            <label><input type="radio" name="export-scope" value="current" checked /> Current tab</label>
+            <label><input type="radio" name="export-scope" value="all" /> All tabs</label>
+            <label><input type="radio" name="export-scope" value="custom" /> Custom</label>
+          </div>
+          <input
+            type="text"
+            id="export-custom"
+            placeholder="e.g. 1-3,5"
+            aria-label="Tabs to export, e.g. 1-3,5"
+          />
+        </div>
+
+        <div class="export-section" data-format="latex" id="export-combine-row">
+          <span class="export-legend">LaTeX</span>
+          <label class="export-check">
+            <input type="checkbox" id="export-combine" checked /> Combine into one .tex file
+          </label>
+        </div>
+
+        <p class="tip" id="export-summary"></p>
+        <p class="export-error" id="export-error"></p>
+        <p class="export-note" id="export-copy-note"></p>
+
+        <div class="export-actions">
+          <button type="button" data-action="export-download" id="export-download">
+            Download
+          </button>
+          <button type="button" data-action="export-copy" id="export-copy">
+            Copy to clipboard
+          </button>
+          <button type="button" data-action="export-copy-image" id="export-copy-image">
+            Copy as Image
+          </button>
+          <button type="button" data-action="export-copy-code" id="export-copy-code">
+            Copy as Code
+          </button>
+        </div>
       </div>
     </div>
 
