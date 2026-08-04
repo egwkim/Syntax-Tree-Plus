@@ -875,6 +875,13 @@ body.link-mode #tree-container [data-node-id] {
 .shortcuts-reset:hover {
   background: var(--btn-hover);
 }
+/* The display-settings header reuses `.shortcuts-header`'s look (same idea:
+   a section title beside its own "Reset to defaults"), but it opens the
+   panel — `.modal-scroll` already pads the top, so the header's own
+   margin-top would double it. */
+.settings-header {
+  margin-top: 0;
+}
 .shortcut-list {
   display: flex;
   flex-direction: column;

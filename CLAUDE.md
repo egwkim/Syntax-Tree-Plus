@@ -492,6 +492,20 @@ Pure model/logic modules with one controller wiring them to the DOM.
   `loadPrefs` clamps a persisted value to the same bounds. The markup's
   `min`/`max` used to be decoration — the handlers took any `> 0`, so a
   typed-in font size of 400 went straight into the layout.
+- **Display settings have their own "Reset to defaults"**, mirroring the
+  Keyboard shortcuts section right below it. `resetDisplaySettings`
+  (`settings.ts`) restores a snapshot (`DISPLAY_DEFAULTS`) taken from the
+  `settings` object literal at module load, before `loadPrefs` or anything
+  else ever mutates it — so the defaults can't drift from what the object
+  actually initializes to. Its scope is exactly the fields that ride in the
+  persisted `prefs` blob and represent a user *preference*: font size,
+  spacing, edge style, the alignment/boxes/triangles toggles (toolbar
+  buttons, but the same blob), auto-subscript and forest layout. It
+  deliberately leaves alone what isn't a preference in that sense: theme
+  colors (they track the light/dark toggle, not a default of their own),
+  per-node `color` overrides (document content — the per-node **Reset**
+  button beside Node color already covers the selected node), and
+  `exportPrefs` (dialog state, never in scope for this button).
 - **Sharing is an explicit act; the URL is not a mirror.** `#t=` used to be
   rewritten by `saveWorkspace` on *every* edit (`history.replaceState` with the
   whole document — multi-KB URLs per keystroke). Now nothing writes the address

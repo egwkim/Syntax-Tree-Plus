@@ -6,6 +6,7 @@ import {
   LeafAlignment,
   SETTING_LIMITS,
   clampSetting,
+  resetDisplaySettings,
 } from "./settings.js";
 import { parseAll, parseLabel } from "./parser.js";
 import { serializeAll, serializePrettyAll } from "./serialize.js";
@@ -1023,6 +1024,13 @@ export function startApp() {
       if (!tree.selectedNode) return;
       delete tree.selectedNode.color;
       renderTree();
+    },
+    "reset-settings"() {
+      resetDisplaySettings();
+      savePrefs();
+      syncSettingsInputs();
+      renderTree();
+      flashStatus("Settings reset to defaults");
     },
     reverse() {
       const sel = tree.selectedNode;
