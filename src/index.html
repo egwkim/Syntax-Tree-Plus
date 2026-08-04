@@ -59,7 +59,7 @@
 
       <div class="group" data-cat="tools" data-cat-label="Tools" data-cat-icon="✥">
         <button data-action="toggle-drag" title="Drag nodes to move them">✥ Move</button>
-        <button data-action="toggle-link" title="Link two nodes with a movement arrow">⤳ Arrow</button>
+        <button data-action="toggle-link" title="Draw a movement arrow between two words">⤳ Arrow</button>
       </div>
 
       <div class="group" data-cat="view" data-cat-label="View" data-cat-icon="⤢">
@@ -153,9 +153,15 @@
             no backslash escape (matching jsSyntaxTree).
           </li>
           <li>
-            Two nodes with the same subscript are linked by a
-            <strong>movement arrow</strong> when one is a trace
-            (<code>t</code>, <code>t*</code>, <code>e</code>).
+            <code>[DP t -&gt; 1]</code> — <code>-&gt;</code> draws a
+            <strong>movement arrow</strong> to terminal <strong>column 1</strong>
+            (terminals counted left to right). <code>&lt;-</code> points the
+            other way, <code>&lt;&gt;</code> both ways. Arrows go on terminals,
+            and the number needs a space in front of it.
+          </li>
+          <li>
+            A subscript is <em>only</em> a label: <code>John_1 … his_1</code>
+            draws no arrow. Say arrows with <code>-&gt;</code>.
           </li>
         </ul>
         <h3>Keyboard</h3>
@@ -186,10 +192,11 @@
             among the target's children. You can't drop a node into itself.
           </li>
           <li>
-            <strong>⤳ Arrow mode:</strong> toggle it on, click a node (the
-            source), then click a second node (the target) to link them with a
-            movement arrow. Click the source again, or click empty space, to
-            cancel.
+            <strong>⤳ Arrow mode:</strong> toggle it on, click a word (the
+            source), then click a second word (the target) to draw a movement
+            arrow. Picking the same pair again cycles the arrowheads
+            (<code>-&gt;</code>, <code>&lt;-</code>, <code>&lt;&gt;</code>, then
+            off). Click the source again, or click empty space, to cancel.
           </li>
           <li>
             <strong>Templates:</strong> X-bar, CP/TP, and Coord expand the

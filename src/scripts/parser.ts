@@ -1,4 +1,4 @@
-import { Node, Tree, derivedTriangle } from "./tree.js";
+import { ArrowEnds, Node, Tree, derivedTriangle, resolveArrows } from "./tree.js";
 
 export interface ParseResult {
   tree: Tree | null;
@@ -30,9 +30,24 @@ type Token =
   | { type: "close" }
   | { type: "sub" }
   | { type: "sup" }
+  | { type: "arrow"; ends: ArrowEnds }
   | WordToken;
 
 const isSpace = (ch: string) => ch === " " || ch === "\t" || ch === "\n" || ch === "\r";
+
+/**
+ * The three arrow markers, recognised **only at the start of a token** — after
+ * whitespace or a delimiter. `-`, `<` and `>` are ordinary word characters
+ * otherwise, so `well-known` and `a->b` stay single words; jsSyntaxTree behaves
+ * the same way (its `parseString` swallows those characters mid-token, and its
+ * `parseArrows` only ever sees the start of one), which is why the arrow needs a
+ * space in front of it: `[DP t -> 2]`.
+ */
+const ARROWS: ReadonlyArray<[string, ArrowEnds]> = [
+  ["->", { to: true, from: false }],
+  ["<-", { to: false, from: true }],
+  ["<>", { to: true, from: true }],
+];
 
 /**
  * Split bracket notation into structural tokens.
@@ -85,6 +100,12 @@ function tokenize(input: string): Token[] {
       tokens.push({ type: "word", value, quoted: true });
       i = j < input.length ? j + 1 : input.length;
     } else {
+      const arrow = ARROWS.find(([mark]) => input.startsWith(mark, i));
+      if (arrow) {
+        tokens.push({ type: "arrow", ends: { ...arrow[1] } });
+        i += 2;
+        continue;
+      }
       let j = i;
       while (j < input.length && !isSpace(input[j]) && !DELIMITERS.has(input[j])) j++;
       tokens.push({ type: "word", value: input.slice(i, j), quoted: false });
@@ -121,14 +142,40 @@ function readValue(
 }
 
 /**
- * Apply any `_x` / `^y` markers that follow a value. A marker with no value
- * after it (mid-typing, or before a `]`) is ignored rather than consuming the
- * next structural token.
+ * Apply any `_x` / `^y` scripts and `-> N` arrow that follow a value.
+ *
+ * A marker with no value after it (mid-typing, or before a `]`) is ignored
+ * rather than consuming the next structural token, and so is an arrow whose
+ * column isn't a plain number. `allowArrow` is false for a node label: only a
+ * terminal can carry an arrow, as in jsSyntaxTree, whose `parseNode` has no
+ * arrow branch at all. The marker is still consumed there, so a stray one can't
+ * be mistaken for terminal content.
  */
-function readScripts(tokens: Token[], i: number, node: Node): number {
+function readAnnotations(
+  tokens: Token[],
+  i: number,
+  node: Node,
+  allowArrow: boolean
+): number {
   let pos = i;
   while (pos < tokens.length) {
     const marker = tokens[pos];
+    if (marker.type === "arrow") {
+      const column = tokens[pos + 1];
+      if (!column || column.type !== "word" || !/^\d+$/.test(column.value)) {
+        pos++; // dangling arrow — skip it
+        continue;
+      }
+      if (allowArrow) {
+        node.arrow = {
+          target: null, // resolved once the whole document is parsed
+          rawColumn: parseInt(column.value, 10),
+          ends: marker.ends,
+        };
+      }
+      pos += 2;
+      continue;
+    }
     if (marker.type !== "sub" && marker.type !== "sup") break;
     const value = tokens[pos + 1];
     if (!value || value.type !== "word") {
@@ -168,7 +215,7 @@ export function parseLabel(raw: string): {
     base = read.value;
     pos = read.next;
   }
-  readScripts(tokens, pos, scratch);
+  readAnnotations(tokens, pos, scratch, false);
   return { base, sub: scratch.subscript, sup: scratch.superscript };
 }
 
@@ -185,7 +232,8 @@ export function parseLabel(raw: string): {
  *   node     := '[' label content ']'
  *   content  := ( node | terminal )*
  *   label    := word | '"' … '"'   (+ optional _sub / ^sup)
- *   terminal := run of bare words | '"' … '"'   (+ optional _sub / ^sup)
+ *   terminal := run of bare words | '"' … '"'   (+ optional _sub / ^sup, arrow)
+ *   arrow    := ( '->' | '<-' | '<>' ) column-number
  *
  * `[NP [Det the] [N cat]]`   -> NP with two labelled children
  * `[N cat]`                  -> N over the word "cat"
@@ -193,6 +241,7 @@ export function parseLabel(raw: string): {
  * `[NP "the" "cat"]`         -> NP over two separate terminals
  * `[NP the big cat_1]`       -> the span "the big cat", subscript 1
  * `[NP [N]]`                 -> NP over a childless *node* N — not a word
+ * `[DP t -> 1]`              -> movement arrow from "t" to terminal column 1
  *
  * Bracketing is what tells a word from a node: content typed bare is a word
  * (`isWord`), anything in its own `[...]` is a node even when it ends up
@@ -218,7 +267,7 @@ export function parseAll(input: string): ParseAllResult {
     pos = next;
     const node = new Node(value);
     node.isWord = true; // unbracketed content is a word (jsSyntaxTree's VALUE)
-    pos = readScripts(tokens, pos, node);
+    pos = readAnnotations(tokens, pos, node, true);
     // A multi-word terminal renders as a triangle; single words don't.
     node.triangle = derivedTriangle(value);
     node.updateTextWidth();
@@ -247,12 +296,12 @@ export function parseAll(input: string): ParseAllResult {
         // The label takes no scripts here — a trailing `_1` binds to the run.
         const child = new Node(rest);
         child.isWord = true;
-        pos = readScripts(tokens, pos, child);
+        pos = readAnnotations(tokens, pos, child, true);
         child.triangle = derivedTriangle(rest);
         child.updateTextWidth();
         node.insertChild(child);
       } else {
-        pos = readScripts(tokens, pos, node);
+        pos = readAnnotations(tokens, pos, node, false);
       }
       node.updateTextWidth();
     } else {
@@ -295,6 +344,9 @@ export function parseAll(input: string): ParseAllResult {
     trees.push(new Tree(root));
   }
   if (trees.length === 0) return { trees: [], error: "Expected '['" };
+  // Columns are counted over the whole document, so arrows can only be pointed
+  // at nodes once every tree is built.
+  resolveArrows(trees);
   return { trees, error: null };
 }
 

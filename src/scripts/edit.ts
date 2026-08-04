@@ -1,4 +1,4 @@
-import { Node, Tree } from "./tree.js";
+import { ArrowEnds, Node, Tree } from "./tree.js";
 
 /** Deep clone a node and its subtree (delegates to Node.clone). */
 export function cloneNodeSubtree(node: Node): Node {
@@ -280,31 +280,47 @@ export function applyAutoSubscripts(tree: Tree, enabled: boolean): void {
   });
 }
 
+/** The arrowhead ends of a movement arrow, in the order Arrow mode cycles them. */
+export const ARROW_CYCLE: ArrowEnds[] = [
+  { to: true, from: false }, // ->
+  { to: false, from: true }, // <-
+  { to: true, from: true }, // <>
+];
+
 /**
- * Next unused plain-integer subscript in the tree, as a string (e.g. "3" if
- * "1" and "2" are already taken). Used to auto-number a fresh movement link.
+ * Point a movement arrow from `source` at `target`.
+ *
+ * Both ends must be **words**: an arrow is written on a terminal and numbered by
+ * terminal column, so a labelled node has nowhere to carry one and no column to
+ * be named by (the same restriction jsSyntaxTree has). Returns false when that
+ * doesn't hold, so the caller can say why rather than silently doing nothing.
+ *
+ * `rawColumn` is left at 0: the number is re-derived from `target` on every
+ * serialize, and only matters for an arrow that came in from text pointing
+ * nowhere.
  */
-export function nextSubscript(tree: Tree): string {
-  let max = 0;
-  tree.root.walk((n) => {
-    if (/^\d+$/.test(n.subscript)) max = Math.max(max, parseInt(n.subscript, 10));
-  });
-  return String(max + 1);
+export function setArrow(source: Node, target: Node, ends: ArrowEnds): boolean {
+  if (source === target || !source.isWord || !target.isWord) return false;
+  source.arrow = { target, rawColumn: 0, ends: { ...ends } };
+  return true;
+}
+
+/** Remove the arrow leaving `node`, if any. Returns whether one was removed. */
+export function clearArrow(node: Node): boolean {
+  if (!node.arrow) return false;
+  node.arrow = null;
+  return true;
 }
 
 /**
- * Link two nodes with a movement arrow by giving them a shared subscript —
- * movement arrows are derived from co-indexation (see render.ts), so this is
- * the data-level effect of the "explicit" arrow tool in the UI. Reuses either
- * node's existing subscript if it has one, else mints a fresh number. No-op
- * (returns false) when linking a node to itself.
+ * What clicking the same pair again in Arrow mode should do: step the ends
+ * through `->`, `<-`, `<>` and then off. Returns null once the cycle is spent,
+ * which the caller turns into `clearArrow`.
  */
-export function linkNodes(tree: Tree, a: Node, b: Node): boolean {
-  if (a === b) return false;
-  const sub = a.subscript || b.subscript || nextSubscript(tree);
-  a.subscript = sub;
-  b.subscript = sub;
-  a.updateTextWidth();
-  b.updateTextWidth();
-  return true;
+export function nextArrowEnds(current: ArrowEnds | null): ArrowEnds | null {
+  if (!current) return ARROW_CYCLE[0];
+  const i = ARROW_CYCLE.findIndex(
+    (e) => e.to === current.to && e.from === current.from
+  );
+  return i < 0 || i === ARROW_CYCLE.length - 1 ? null : ARROW_CYCLE[i + 1];
 }

@@ -2,7 +2,7 @@ import { Tree, Node, derivedTriangle } from "./tree.js";
 import { render } from "./render.js";
 import { settings, applyThemeColors, LeafAlignment } from "./settings.js";
 import { parseAll, parseLabel } from "./parser.js";
-import { serializeAll, serializePretty } from "./serialize.js";
+import { serializeAll, serializePrettyAll } from "./serialize.js";
 import { History } from "./history.js";
 import { Workspace, parseTabSelection, type TabData } from "./tabs.js";
 import { setupCompactToolbar } from "./toolbar.js";
@@ -69,7 +69,9 @@ import {
   toggleWordNode,
   isDescendant,
   reparent,
-  linkNodes,
+  setArrow,
+  clearArrow,
+  nextArrowEnds,
 } from "./edit.js";
 
 const DEFAULT_DOC =
@@ -205,11 +207,23 @@ export function startApp() {
    * Replace the document's trees. `keep` restores the selection by path;
    * without it the first tree's root is selected (callers that want no
    * selection at all clear it afterwards).
+   *
+   * Every call mints brand-new `Tree`/`Node` objects (a text reparse, an
+   * undo/redo restore, and a tab switch all rebuild from a bracket string), so
+   * a pending Arrow-mode `linkSource` from before the rebuild would otherwise
+   * dangle — pointing at a node in a tree that's no longer live. The next click
+   * would then compare it against the *new* tree, always find them unequal (even
+   * within what the user considers "the same tab"), and refuse to link with a
+   * confusing "same tree" toast that no click could ever satisfy. Dropping it
+   * here, rather than at each call site, covers every path that replaces
+   * `trees` in one place; Arrow mode itself stays on so the user can just pick
+   * a fresh source.
    */
   function setTrees(list: Tree[], keep?: SelectionPath) {
     trees = list.length > 0 ? list : [new Tree()];
     setActiveIndex(keep ? keep.tree : activeIndex);
     selectNode(keep ? nodeAtPath(trees, keep) : tree.root);
+    linkSource = null;
   }
 
   /** Is DOM focus currently on a node inside the tree SVG? */
@@ -371,18 +385,26 @@ export function startApp() {
   treePane.addEventListener("pointercancel", endPan);
 
   /**
-   * Two-click picker for the explicit "Arrow" tool: the first click marks a
-   * source node (shown via normal selection styling + a status hint); the
-   * second click links it to the target with a shared subscript (`linkNodes`
-   * in edit.ts) — the movement arrow itself is still derived from that
-   * co-indexation, same as manually typing matching subscripts.
+   * Two-click picker for the "Arrow" tool: the first click marks a source word
+   * (shown via normal selection styling + a status hint), the second writes the
+   * arrow onto it (`setArrow` in edit.ts). The arrow is real notation — a
+   * `-> N` on the source terminal — so it survives the round trip and undo,
+   * and nothing is inferred from subscripts.
+   *
+   * Picking the same pair again cycles the arrowheads `->` → `<-` → `<>` → off,
+   * which is the whole direction UI: no extra buttons, and every spelling
+   * jsSyntaxTree has is reachable.
    */
   function handleLinkClick(node: Node) {
     if (!linkSource) {
+      if (!node.isWord) {
+        flashStatus("Arrows attach to words — pick a terminal");
+        return;
+      }
       linkSource = node;
       selectNode(node);
       renderTree();
-      flashStatus(`Arrow from "${node.label || "∅"}" — click the target node`);
+      flashStatus(`Arrow from "${node.label || "∅"}" — click the target word`);
       return;
     }
     if (node === linkSource) {
@@ -391,18 +413,36 @@ export function startApp() {
       flashStatus("Cancelled");
       return;
     }
-    // Movement is derived from co-indexation *within* a tree (see render.ts),
-    // so a shared subscript across two trees would draw nothing. Keep waiting
-    // for a target in the source's own tree rather than silently doing nothing.
-    if (treeOf(node) !== treeOf(linkSource)) {
-      flashStatus("A movement arrow links two nodes of the same tree");
+    if (!node.isWord) {
+      flashStatus("Arrows point at words — pick a terminal");
       return;
     }
-    linkNodes(treeOf(linkSource), linkSource, node);
+    // Each tree is drawn into its own group, so a curve between two of them has
+    // nowhere to live. Keep waiting for a target in the source's own tree
+    // rather than writing an arrow that can't be drawn.
+    if (treeOf(node) !== treeOf(linkSource)) {
+      flashStatus("A movement arrow links two words of the same tree");
+      return;
+    }
+    const existing = linkSource.arrow;
+    const ends =
+      existing && existing.target === node ? nextArrowEnds(existing.ends) : nextArrowEnds(null);
+    if (ends) {
+      setArrow(linkSource, node, ends);
+      flashStatus(
+        ends.to && ends.from
+          ? "Movement arrow: both ends"
+          : ends.from
+            ? "Movement arrow: reversed"
+            : "Movement arrow added"
+      );
+    } else {
+      clearArrow(linkSource);
+      flashStatus("Movement arrow removed");
+    }
     selectNode(node);
     linkSource = null;
     mutated();
-    flashStatus("Linked with a movement arrow");
   }
 
   /**
@@ -1007,7 +1047,7 @@ export function startApp() {
       // Reformats the pane from the live trees, not the current text — so it
       // also normalizes stray whitespace/quoting rather than just re-indenting
       // what's there. The trees themselves are unchanged (no re-render needed).
-      const pretty = trees.map((t) => serializePretty(t)).join("\n\n");
+      const pretty = serializePrettyAll(trees);
       if (pretty === textInput.value) return;
       historyStack.push(pretty);
       persistActive(pretty);

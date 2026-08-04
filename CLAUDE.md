@@ -48,7 +48,7 @@ pnpm run watch  # rebuild + serve on change
   Deploy refuses a dirty `src/` (`ALLOW_DIRTY=1` overrides) — a build from
   uncommitted source can't be reproduced by that rebuild path.
 - `make test` runs the unit tests (`test/*.test.mjs`: `roundtrip` for one tree,
-  `multitree` for a whole document, `movement` for arrow derivation, `tabs` for
+  `multitree` for a whole document, `movement` for the arrow notation, `tabs` for
   the workspace model, `export-select` for the export dialog's tab-range and
   filename logic) on Node's built-in runner — no test dependency. They build first and import from
   `dist/`; `test/dom-stub.mjs` fakes the canvas that `tree.ts` measures text
@@ -63,12 +63,12 @@ Pure model/logic modules with one controller wiring them to the DOM.
 
 | Module | Responsibility |
 | --- | --- |
-| `tree.ts` | `Node` / `Tree` model. Node = label + `subscript`/`superscript`/`triangle` + children. A node is either a **word** (`isWord`) or a labelled **node** — see the words-vs-nodes note below. Also width measurement and layout fields. |
-| `parser.ts` | Bracket notation → trees. `parseAll` reads a whole **document** (every top-level bracket group) — that's what the app calls; `parse` is the single-tree wrapper returning the first. Own tokenizer (`[`/`]`/`_`/`^`/word/`"…"`); tolerant — auto-closes missing `]`, missing labels and unterminated quotes, and skips junk *between* trees. `parseLabel` splits `NP_1^0` into base/sub/sup and shares that tokenizer. Bracketing is what marks a word: bare content is a word, `[...]` is a node. |
-| `serialize.ts` | `Tree` → bracket notation. Inverse of the parser: words go out bare, nodes keep their brackets (`[N]` even when childless), and a label/word is quoted only when it would otherwise be misread (see the quoting notes below), so ordinary documents stay bare. `serializeAll` is the document form (one tree per line). `serializePretty` (multi-line, one tree) backs the toolbar's Pretty-print button — `app.ts` joins one call per tree with a blank line, since there's no document-level wrapper. |
+| `tree.ts` | `Node` / `Tree` model. Node = label + `subscript`/`superscript`/`triangle` + children, plus an optional explicit `arrow` on a word. Also the document-wide terminal numbering an arrow points by (`wordColumns`/`wordColumnIndex`/`resolveArrows`). A node is either a **word** (`isWord`) or a labelled **node** — see the words-vs-nodes note below. Also width measurement and layout fields. |
+| `parser.ts` | Bracket notation → trees. `parseAll` reads a whole **document** (every top-level bracket group) — that's what the app calls; `parse` is the single-tree wrapper returning the first. Own tokenizer (`[`/`]`/`_`/`^`/`->`/`<-`/`<>`/word/`"…"`); tolerant — auto-closes missing `]`, missing labels and unterminated quotes, and skips junk *between* trees. `parseLabel` splits `NP_1^0` into base/sub/sup and shares that tokenizer. An arrow marker is read only after a terminal and resolved to its target once every tree is built. Bracketing is what marks a word: bare content is a word, `[...]` is a node. |
+| `serialize.ts` | `Tree` → bracket notation. Inverse of the parser: words go out bare, nodes keep their brackets (`[N]` even when childless), and a label/word is quoted only when it would otherwise be misread (see the quoting notes below), so ordinary documents stay bare. An arrow is written back as `-> N` with N recomputed from where its target sits now. `serializeAll` is the document form (one tree per line) and is what shares one column index across trees. `serializePrettyAll` (multi-line, blank line between trees) backs the toolbar's Pretty-print button and shares one column index the same way. |
 | `brackets.ts` | Pure, DOM-free helpers for the text pane: bracket matching (quote-aware — a `[` inside `"…"` is label text, not structure), matched-pair-at-caret detection, highlight-HTML building, and edit diff/position tracking. Unit-testable without a browser. |
 | `render.ts` | `Tree[]` → one `<svg>`. Two passes per tree (`layoutTree` positions, `drawTree` draws), then the boxes are composed onto one canvas — row or column per `settings.forestLayout`. Handles triangles, scripts, movement arrows, leaf alignment, bounding-box sizing. Tags each node group with `data-node-id`. |
-| `edit.ts` | Pure tree ops: add child/sibling (positional, each with a word-or-node choice), `toggleWordNode`, delete (promotes children), wrap, templates (X-bar, CP/TP, coordination), `linkNodes`/`nextSubscript` (movement-arrow tool), `applyAutoSubscripts` (auto-subscript display option), `reparent`, `isDescendant`. |
+| `edit.ts` | Pure tree ops: add child/sibling (positional, each with a word-or-node choice), `toggleWordNode`, delete (promotes children), wrap, templates (X-bar, CP/TP, coordination), `setArrow`/`clearArrow`/`nextArrowEnds` (movement-arrow tool), `applyAutoSubscripts` (auto-subscript display option), `reparent`, `isDescendant`. |
 | `export.ts` | File *builders*, not button handlers: `pngFile`/`svgFile`/`latexFile` turn a `Tree[]` into an `ExportFile` (blob + filename), `downloadFiles` saves a batch, `uniqueFilenames` de-duplicates tab names, and `copyPNG`/`copySVGImage`/`copySVGMarkup`/`copyLaTeX` write to the clipboard, and `clipboardImageSupported`/`clipboardTextSupported` feature-detect what the browser will accept. Each call takes one tab's trees — an image carries every tree of that tab as laid out, LaTeX emits one `forest` environment per tree. Always draws with the light palette — see the export-colors note below. |
 | `history.ts` | Undo/redo over document snapshots (bracket strings). One instance **per tab**. |
 | `tabs.ts` | `Workspace` model: an ordered list of named documents (`TabData` = id/name/`text` + an optional `draft`) + which is active. Pure model — no DOM, no history; add/insert/remove/duplicate/move/rename/switch and `toStored`/`fromStored`. `remove` returns the tab **and the index it sat at**, since putting one back also needs its undo history — which only the controller has, so the closed-tab stack lives there. `parseTabSelection` ("1-3,5" → indices) lives here too — the export dialog's tab picker, kept beside the model it indexes into and testable without a DOM. |
@@ -123,18 +123,53 @@ Pure model/logic modules with one controller wiring them to the DOM.
   Enter/Escape/blur already use, gated by `finish`'s own `done` flag — so a
   dismiss behaves exactly like a blur (commits, doesn't discard) and can't
   double-remove the node.
-- **Movement arrows** are derived, not drawn explicitly: **any** two nodes of one
-  tree that share a subscript are linked. A trace (`t`, `t*`, `e`, `*` —
-  `collectMovement`'s regex, case-insensitive) only decides *direction*. With at
-  least one trace and one non-trace in a co-indexed group, `collectMovement`
-  orders the whole group by depth (shallowest first, stable on ties — a landing
-  site is always shallower than the position it moved from) and links each
-  occurrence to the previous one in that order, so successive-cyclic movement
-  through several specifier positions chains trace → trace → antecedent instead
-  of fanning every trace out to the same target. With no trace at all, each
-  later occurrence points at the first instead — which is what makes Arrow mode
-  work, since `linkNodes` just co-indexes two ordinary nodes with no trace label
-  and lets the renderer derive the arrow. No column-number arrow syntax.
+- **Movement arrows are written, never inferred.** A terminal carries
+  jsSyntaxTree's own arrow spelling — `-> N`, `<- N`, `<> N`, where N is the
+  target's **column**: its 1-based position among the document's terminals,
+  counted left to right (`wordColumns` in `tree.ts`; jsSyntaxTree's
+  `findTargetLeaf` counts VALUEs the same way). `->` heads at the target, `<-`
+  at the source, `<>` at both.
+  - **A subscript is only a label.** Co-indexation draws nothing, which is the
+    point: `John_1 … his_1` is a binding index, not movement, and no rule over
+    the tree can tell the two apart. The old derivation guessed — with several
+    co-indexed nodes and no `t`-style trace it fanned them all onto the topmost
+    instead of chaining, and it drew arrows on binding indices — so it's gone,
+    along with the trace regex that decided direction.
+  - **Only terminals.** A word can carry an arrow and be a column; a labelled
+    node can be neither, exactly as in jsSyntaxTree (its `parseNode` has no
+    arrow branch, and `is_leaf` there means "is a VALUE"). Our `isWord` is that
+    same distinction, so the two line up 1:1. The cost is an empty landing site
+    (`[DP]`) can't be an endpoint — write a terminal in it (`[DP t]`), which is
+    what jsSyntaxTree documents do anyway.
+  - **The number is re-derived, not stored.** Parsing resolves the column to a
+    node *reference* (`Node.arrow.target`, `resolveArrows`) and serializing asks
+    the target where it sits now, so every GUI edit renumbers the arrows for
+    free and only hand-editing the text can move one. `rawColumn` keeps a number
+    that resolved to nothing (typed past the last column) so it round-trips
+    instead of vanishing; a target that leaves the document drops the arrow,
+    since there's nothing to point at.
+  - The marker is only recognised at the **start of a token**, so `well-known`
+    and `a->b` stay single words and `-> 1` needs the space in front — matching
+    jsSyntaxTree, whose `parseString` also swallows `-`/`<`/`>` mid-token.
+  - `Node.clone()` copies an arrow only when both ends are inside the copied
+    subtree, remapped onto the copies; otherwise the copy would reference — and
+    renumber against — a node in the original tree.
+  - **A live reference can go stale, so `collectArrows` re-checks both ends**
+    against the walk it's already doing: each must be a **word** that is still
+    **in this tree**. `removeChild` leaves a detached node's `tree` field
+    pointing at its old tree, so a `target.tree === tree` test passes for a
+    deleted node that no longer has a layout (stale coordinates, or `NaN` if it
+    was never positioned — which propagates into the box height and collapses
+    the canvas). An end can also stop being a word (`toggleWordNode`,
+    drag-reparenting onto it), and a non-word is neither serialized with an
+    arrow nor counted as a column. `serializeAll` drops both cases already; the
+    check is what keeps the drawing and the notation saying the same thing.
+  - **The markers are quoted like any other delimiter** (`ARROW_TOKEN` in
+    `serialize.ts`). They're the one piece of syntax that isn't a single
+    character, so the character-class quoting rules couldn't see them: `[N "->"]`
+    went out as `[N ->]` and came back as an empty `[N]`. The pattern matches a
+    marker only at a token boundary, exactly where the tokenizer reads one, so
+    `-ed`, `well-known`, `a->b` and `<p>` stay bare.
 - **Words vs nodes** (`Node.isWord`, jsSyntaxTree's VALUE vs NODE). A leaf is not
   automatically a word: `[N cat]` is `N` over the **word** `cat`, while `[NP [N]]`
   is a childless **node** — a bare category, or a symbol slot the user hasn't
@@ -205,10 +240,12 @@ Pure model/logic modules with one controller wiring them to the DOM.
   warning needs the space — it isn't dead code by accident.
 - **Drag-to-move** uses Pointer Events (touch/pen ok) and only re-parents onto a
   non-descendant; a caret shows the drop index. It's behind the "Move" mode toggle.
-- **Arrow-link mode** (`toggle-link` in `app.ts`) is a two-click node picker, same
-  spirit as Move mode, mutually exclusive with it (enabling one turns off the
-  other). It doesn't add new data or notation — it just automates giving two
-  nodes a shared subscript, so the existing derived-arrow rendering picks it up.
+- **Arrow-link mode** (`toggle-link` in `app.ts`) is a two-click **word** picker,
+  same spirit as Move mode, mutually exclusive with it (enabling one turns off
+  the other). It writes real notation (`setArrow`), and picking the same pair
+  again cycles the ends `->` → `<-` → `<>` → off (`nextArrowEnds`) — that
+  cycle *is* the direction UI, so no extra buttons. Clicking a labelled node
+  says so in a toast instead of silently doing nothing.
 - Per-node `color` (like `id`) is session-only state, not part of the bracket
   notation — it's lost on any edit that re-parses the whole tree from text.
 - **Auto-subscript** (`settings.autoSubscript`) writes to a *transient*
@@ -334,9 +371,14 @@ Pure model/logic modules with one controller wiring them to the DOM.
   translated into its slot (`buildSVG` composes; `settings.forestLayout` picks
   side-by-side or stacked, persisted with the other display prefs). The rules
   that fall out of "the trees are independent":
-  - **Co-indexation is per tree.** `collectMovement` walks one root, so a shared
-    subscript across two trees draws nothing; Arrow mode refuses a cross-tree
-    pair with a toast rather than silently doing nothing.
+  - **Arrow columns are per document, arrows are per tree.** `wordColumns` counts
+    every tree's terminals (jsSyntaxTree numbers across its invisible root the
+    same way), so `-> N` can name a word in another tree — but `collectArrows`
+    skips such a pair, since each tree is laid out in its own coordinate space
+    and drawn into its own group, leaving nowhere to put the curve. The number
+    survives serialization, so the arrow starts drawing if the two ends ever end
+    up in one tree. Arrow mode refuses a cross-tree pair with a toast rather
+    than writing an arrow that can't be drawn.
   - **A root isn't draggable.** Detaching it would leave its tree rootless.
     (With one tree this was already impossible — every drop target was its own
     descendant — so `updateDropTarget` now says so explicitly.) Dragging a
@@ -436,6 +478,10 @@ Pure model/logic modules with one controller wiring them to the DOM.
 (Completed work is documented in the sections above, not tracked here.)
 
 Bugs
+- [ ] **LaTeX export drops movement arrows.** `toLatex` emits nodes only, so a
+      document's arrows survive SVG and PNG but vanish in `forest` output. Now
+      that arrows are explicit (`Node.arrow`), each end can be given a `name=`
+      and the arrow drawn with a `\draw[->]` in the environment's tikz layer.
 - [ ] **A command can be rebound onto a hardcoded key.** `rebind` only scans other
       `COMMANDS` entries, so binding one to `ArrowUp`, `Ctrl+z` or `Escape` is
       accepted and then dead — `app.ts` handles those before consulting the keymap
@@ -467,13 +513,15 @@ Robustness
       the whole document on every edit, so large trees mean multi-KB URLs
       rewritten per keystroke. Debounce it; consider compressing the payload.
 - [ ] Extend the test suite: `make test` covers parser/serializer round-trips
-      (`test/roundtrip.test.mjs`, `test/multitree.test.mjs`), the workspace
-      model (`test/tabs.test.mjs`), the pure text-pane helpers
-      (`test/brackets.test.mjs`: bracket matching, matched-pair-at-caret, and the
-      diff/index-mapping pair) and the export dialog's pure parts
-      (`test/export-select.test.mjs`), but `edit.ts` and `keymap.ts` are still
-      untested, and there's no Playwright smoke test in-repo yet (ad hoc runs
-      against a `make serve` build are how the fixes above were checked).
+      (`test/roundtrip.test.mjs`, `test/multitree.test.mjs`), movement arrows
+      (`test/movement.test.mjs`, which also reaches `setArrow`/`clearArrow`/
+      `nextArrowEnds`), the workspace model (`test/tabs.test.mjs`), the pure
+      text-pane helpers (`test/brackets.test.mjs`: bracket matching,
+      matched-pair-at-caret, and the diff/index-mapping pair) and the export
+      dialog's pure parts (`test/export-select.test.mjs`), but the rest of
+      `edit.ts` and `keymap.ts` are still untested, and there's no Playwright
+      smoke test in-repo yet (ad hoc runs against a `make serve` build are how
+      the fixes above were checked).
 
 Features
 - [ ] **Export options still missing**: the dialog covers scale, transparency

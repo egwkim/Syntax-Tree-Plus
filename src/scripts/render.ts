@@ -1,4 +1,4 @@
-import { Tree, Node } from "./tree.js";
+import { ArrowEnds, Tree, Node } from "./tree.js";
 import { settings } from "./settings.js";
 import { applyAutoSubscripts } from "./edit.js";
 
@@ -42,9 +42,9 @@ interface TreeBox {
   minX: number;
   maxX: number;
   maxY: number;
-  /** Y of the terminal row — where movement arrows dip below. */
+  /** Y of the terminal row. */
   bottomRowY: number;
-  arrows: MovementPair[];
+  arrows: MovementArrow[];
   /** Size of the whole box, margins and movement-arrow room included. */
   width: number;
   height: number;
@@ -92,9 +92,11 @@ function layoutTree(tree: Tree, margin: number): TreeBox {
     maxY = Math.max(maxY, n.y + height / 2);
   });
 
-  // Reserve room beneath the tree for movement arrows.
-  const arrows = collectMovement(tree);
-  const arrowRoom = arrows.length > 0 ? 60 : 0;
+  // Reserve room beneath the tree for movement arrows — as much as the curves
+  // actually reach, which depends on what each one spans.
+  const arrows = collectArrows(tree);
+  const arrowBottom = assignArrowDips(tree, arrows, height);
+  const arrowRoom = Math.max(0, arrowBottom - maxY + 12);
 
   return {
     tree,
@@ -156,7 +158,7 @@ function drawTree(
   // Node groups are drawn last so labels sit on top of the edges.
   tree.root.walk((node) => drawLabel(g, tree, node, opts, tabStop));
 
-  drawMovementArrows(arrowsG, box.arrows, box.bottomRowY, settings.node.height);
+  drawMovementArrows(arrowsG, box.arrows, settings.node.height);
   return g;
 }
 
@@ -453,65 +455,106 @@ function drawLabel(
 
 // --- Movement arrows ---------------------------------------------------
 
-export interface MovementPair {
-  from: Node; // trace / lower element
-  to: Node; // antecedent
+export interface MovementArrow {
+  /** The word the arrow is written on. */
+  from: Node;
+  /** The word its column names. */
+  to: Node;
+  ends: ArrowEnds;
+  /** Y the curve bends down to; filled in by `assignArrowDips` once the tree is
+   *  laid out, since it depends on what the arrow spans. */
+  dip: number;
 }
 
 /**
- * Derive movement arrows from co-indexation: nodes that share a subscript are
- * linked. The trace (a leaf labelled `t`, `t*`, `e`, or `*`) is the arrow's
- * source; its antecedent is the target.
+ * The movement arrows of one tree.
+ *
+ * Arrows are **written**, not inferred: a word carries `-> N` and N names the
+ * target's terminal column (see `Arrow` in tree.ts). Nothing is derived from
+ * subscripts, so a co-index used for binding (`John_1 … his_1`) or for plain
+ * numbering draws no arrow — only what the notation actually says does.
+ *
+ * An arrow whose target sits in *another* tree of the document is skipped: each
+ * tree is laid out in its own coordinate space and drawn into its own group, so
+ * there's nowhere to put the curve. Columns are still counted document-wide, so
+ * such an arrow keeps its number and starts drawing the moment the two ends end
+ * up in one tree.
+ *
+ * Both ends are re-checked against *this* walk rather than trusted, because
+ * `Node.arrow.target` is a live reference that a GUI edit can invalidate
+ * without touching the arrow:
+ *
+ * - deleting the target detaches it, and `removeChild` leaves its `tree`
+ *   pointing at the tree it used to be in, so a `target.tree === tree` test
+ *   still passes while the node has no layout — the curve would be drawn to
+ *   stale coordinates, or to `NaN` if it was never positioned, which poisons
+ *   the box height and collapses the whole canvas;
+ * - either end can stop being a word (drag-reparenting onto it, `toggleWordNode`),
+ *   and a non-word is neither serialized with an arrow nor counted as a column,
+ *   so drawing one would put the canvas at odds with the text pane.
+ *
+ * In both cases `serializeAll` already drops the arrow, so the check is what
+ * keeps the drawing and the notation saying the same thing.
  */
-export function collectMovement(tree: Tree): MovementPair[] {
-  const byIndex = new Map<string, Node[]>();
-  tree.root.walk((n) => {
-    if (n.subscript) {
-      const arr = byIndex.get(n.subscript) ?? [];
-      arr.push(n);
-      byIndex.set(n.subscript, arr);
-    }
-  });
+export function collectArrows(tree: Tree): MovementArrow[] {
+  const present = new Set<Node>();
+  tree.root.walk((n) => present.add(n));
 
-  const isTrace = (n: Node) =>
-    n.isLeaf && /^(t\*?|e|\*)$/i.test(n.label.trim());
-
-  const pairs: MovementPair[] = [];
-  byIndex.forEach((nodes) => {
-    if (nodes.length < 2) return;
-    const traces = nodes.filter(isTrace);
-    const antecedents = nodes.filter((n) => !isTrace(n));
-    if (traces.length > 0 && antecedents.length > 0) {
-      // Successive-cyclic movement: a landing site is always shallower than
-      // the position it moved from, so ordering the whole co-indexed group by
-      // depth (stable on ties, so same-depth nodes keep their tree/document
-      // order) puts the antecedent first and each trace after the one it
-      // moved from. Linking every node to the previous one in that order
-      // chains trace -> trace -> antecedent instead of fanning every trace
-      // out to a single target.
-      const chain = [...nodes].sort((a, b) => a.depth - b.depth);
-      for (let i = 1; i < chain.length; i++) {
-        pairs.push({ from: chain[i], to: chain[i - 1] });
-      }
-    } else {
-      // No explicit trace (plain Arrow-mode co-indexation) — link later
-      // occurrences to the first rather than chaining them.
-      for (let i = 1; i < nodes.length; i++) {
-        pairs.push({ from: nodes[i], to: nodes[0] });
-      }
-    }
+  const arrows: MovementArrow[] = [];
+  tree.root.walk((node) => {
+    if (!node.isWord) return;
+    const target = node.arrow?.target;
+    if (!target || target === node) return;
+    if (!target.isWord || !present.has(target)) return;
+    arrows.push({ from: node, to: target, ends: node.arrow!.ends, dip: NaN });
   });
-  return pairs;
+  return arrows;
 }
 
-function drawMovementArrows(
-  g: SVGElement,
-  pairs: MovementPair[],
-  bottomRowY: number,
-  height: number
-) {
-  const dip = bottomRowY + height / 2 + 40;
-  pairs.forEach(({ from, to }) => {
+/**
+ * Choose how deep each arrow bends below the tree, and report the lowest point
+ * any of the curves reaches.
+ *
+ * Two things set the depth, both borrowed from jsSyntaxTree's `makeArrowSetOn`:
+ * the arrow clears the deepest material it spans horizontally (so it never
+ * cuts through the terminals it passes under), and an arrow that *contains*
+ * another goes deeper still, so a chain of arrows through several landing sites
+ * nests instead of collapsing onto one line.
+ */
+function assignArrowDips(tree: Tree, arrows: MovementArrow[], height: number): number {
+  if (arrows.length === 0) return 0;
+  const nodes: Node[] = [];
+  tree.root.walk((n) => nodes.push(n));
+  const span = (a: MovementArrow): [number, number] => [
+    Math.min(a.from.x, a.to.x),
+    Math.max(a.from.x, a.to.x),
+  ];
+
+  let lowest = 0;
+  arrows.forEach((arrow) => {
+    const [left, right] = span(arrow);
+    let bottom = Math.max(arrow.from.y, arrow.to.y);
+    nodes.forEach((n) => {
+      if (n.x >= left && n.x <= right) bottom = Math.max(bottom, n.y);
+    });
+    const contained = arrows.filter((other) => {
+      if (other === arrow) return false;
+      const [l, r] = span(other);
+      return l >= left && r <= right && r - l < right - left;
+    }).length;
+    arrow.dip = bottom + height / 2 + 34 + contained * 18;
+    // A cubic with both control points at `dip` only reaches three quarters of
+    // the way there; reserving the full dip would pad every export with empty
+    // space the drawing never uses.
+    const sy = arrow.from.y + height / 2;
+    const ty = arrow.to.y + height / 2;
+    lowest = Math.max(lowest, (sy + ty) / 8 + 0.75 * arrow.dip);
+  });
+  return lowest;
+}
+
+function drawMovementArrows(g: SVGElement, arrows: MovementArrow[], height: number) {
+  arrows.forEach(({ from, to, ends, dip }) => {
     const sx = from.x;
     const sy = from.y + height / 2;
     const tx = to.x;
@@ -522,28 +565,38 @@ function drawMovementArrows(
       fill: "none",
       stroke: settings.movement.color,
       "stroke-width": settings.movement.width,
-      "marker-end": "url(#arrowhead)",
     });
+    // `->` heads at the target, `<-` at the source, `<>` at both. The tail
+    // marker is a mirrored copy rather than `orient="auto-start-reverse"`,
+    // which older renderers (and some SVG-to-PDF converters) ignore.
+    if (ends.to) path.setAttribute("marker-end", "url(#arrowhead)");
+    if (ends.from) path.setAttribute("marker-start", "url(#arrowtail)");
     g.appendChild(path);
   });
 }
 
 function defineArrowhead(svg: SVGSVGElement) {
   const defs = el("defs");
-  const marker = el("marker");
-  attr(marker, {
-    id: "arrowhead",
-    markerWidth: 8,
-    markerHeight: 8,
-    refX: 6,
-    refY: 3,
-    orient: "auto",
-    markerUnits: "strokeWidth",
+  const heads: [string, string][] = [
+    ["arrowhead", "M0,0 L6,3 L0,6 Z"],
+    ["arrowtail", "M6,0 L0,3 L6,6 Z"],
+  ];
+  heads.forEach(([id, d]) => {
+    const marker = el("marker");
+    attr(marker, {
+      id,
+      markerWidth: 8,
+      markerHeight: 8,
+      refX: id === "arrowhead" ? 6 : 0,
+      refY: 3,
+      orient: "auto",
+      markerUnits: "strokeWidth",
+    });
+    const p = el("path");
+    attr(p, { d, fill: settings.movement.color });
+    marker.appendChild(p);
+    defs.appendChild(marker);
   });
-  const p = el("path");
-  attr(p, { d: "M0,0 L6,3 L0,6 Z", fill: settings.movement.color });
-  marker.appendChild(p);
-  defs.appendChild(marker);
   svg.appendChild(defs);
 }
 

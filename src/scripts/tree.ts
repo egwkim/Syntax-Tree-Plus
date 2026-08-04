@@ -24,6 +24,35 @@ export function derivedTriangle(label: string): boolean {
 }
 
 /**
+ * Which ends of a movement arrow carry an arrowhead: jsSyntaxTree's `->` (head
+ * at the target), `<-` (head at the source) and `<>` (both).
+ */
+export interface ArrowEnds {
+  to: boolean;
+  from: boolean;
+}
+
+/**
+ * An explicit movement arrow, written after a terminal as `-> N` / `<- N` /
+ * `<> N`, where N is the target's **column**: its 1-based position among the
+ * document's terminals, counted left to right. That's jsSyntaxTree's own arrow
+ * spelling (`findTargetLeaf` counts VALUEs), so a document written there draws
+ * the same arrows here.
+ *
+ * The column is resolved to a node reference when the text is parsed, and the
+ * *reference* is what the app then keeps: any GUI edit that shifts the columns
+ * renumbers itself on the next serialize, because the number is re-derived from
+ * where the target sits now. `rawColumn` is kept for the one case a reference
+ * can't cover — a hand-typed number that points nowhere — so it round-trips
+ * instead of being silently dropped.
+ */
+export interface Arrow {
+  target: Node | null;
+  rawColumn: number;
+  ends: ArrowEnds;
+}
+
+/**
  * A single node in a syntax tree.
  *
  * A node is either a **labelled node** such as `NP`, `VP`, `S`, or a **word**
@@ -54,6 +83,10 @@ export class Node {
    *  spawn movement arrows; a manual `subscript` always wins. Recomputed on
    *  every render (see `applyAutoSubscripts` / `buildSVG`). */
   autoSubscript: string = "";
+  /** Explicit movement arrow leaving this word, or null. Words only — a
+   *  labelled node can't carry one, matching jsSyntaxTree, where only a VALUE
+   *  is allowed an arrow and only a VALUE can be its target. */
+  arrow: Arrow | null = null;
 
   children: Node[];
   parent: Node | null = null;
@@ -164,8 +197,37 @@ export class Node {
     return this.textWidth;
   }
 
-  /** Deep clone of this node and its subtree (no parent linkage). */
+  /**
+   * Deep clone of this node and its subtree (no parent linkage).
+   *
+   * An arrow is copied only when **both** of its ends are inside the copied
+   * subtree, remapped onto the copies. An arrow pointing outside would otherwise
+   * make the copy reference a node in the original tree, and the next serialize
+   * would emit that node's column — an arrow the user never drew.
+   */
   clone(): Node {
+    const copy = this.cloneWithoutArrows();
+    const map = new Map<Node, Node>();
+    const pair = (from: Node, to: Node) => {
+      map.set(from, to);
+      from.children.forEach((c, i) => pair(c, to.children[i]));
+    };
+    pair(this, copy);
+    this.walk((n) => {
+      const target = n.arrow?.target;
+      if (!target) return;
+      const newTarget = map.get(target);
+      if (!newTarget) return;
+      map.get(n)!.arrow = {
+        target: newTarget,
+        rawColumn: n.arrow!.rawColumn,
+        ends: { ...n.arrow!.ends },
+      };
+    });
+    return copy;
+  }
+
+  private cloneWithoutArrows(): Node {
     const copy = new Node(this.label);
     copy.subscript = this.subscript;
     copy.superscript = this.superscript;
@@ -173,7 +235,7 @@ export class Node {
     copy.isWord = this.isWord;
     copy.color = this.color;
     copy.updateTextWidth();
-    this.children.forEach((child) => copy.insertChild(child.clone()));
+    this.children.forEach((child) => copy.insertChild(child.cloneWithoutArrows()));
     return copy;
   }
 
@@ -230,4 +292,45 @@ export class Tree {
     });
     return max;
   }
+}
+
+/**
+ * Every word of a document, in document order — the columns an arrow's `N`
+ * counts.
+ *
+ * Only **words** are columns. A childless *node* (`[N]`) is not one, matching
+ * jsSyntaxTree exactly, where the count is over VALUEs (`is_leaf` there means
+ * "is a VALUE", not "has no children"). The count spans the whole document
+ * rather than one tree, again as in jsSyntaxTree, whose invisible root holds
+ * every top-level group.
+ */
+export function wordColumns(trees: Tree[]): Node[] {
+  const words: Node[] = [];
+  trees.forEach((tree) =>
+    tree.root.walk((n) => {
+      if (n.isWord) words.push(n);
+    })
+  );
+  return words;
+}
+
+/** Column number (1-based) of every word in `trees`. */
+export function wordColumnIndex(trees: Tree[]): Map<Node, number> {
+  const index = new Map<Node, number>();
+  wordColumns(trees).forEach((word, i) => index.set(word, i + 1));
+  return index;
+}
+
+/**
+ * Point every arrow in `trees` at the word its column names, dropping the
+ * target when the number lands outside the document. Runs after a parse, and
+ * again whenever a document is rebuilt from text.
+ */
+export function resolveArrows(trees: Tree[]): void {
+  const words = wordColumns(trees);
+  trees.forEach((tree) =>
+    tree.root.walk((n) => {
+      if (n.arrow) n.arrow.target = words[n.arrow.rawColumn - 1] ?? null;
+    })
+  );
 }
