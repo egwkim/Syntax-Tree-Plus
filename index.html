@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Syntax Tree Plus</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='13' font-size='13'%3E%F0%9F%8C%B3%3C/text%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="css/styles.css" />
+  </head>
+  <body>
+    <!-- Toolbar. Every `.group[data-cat]` doubles as a category on small
+         screens: the compact layout (see toolbar.ts) hides all but one and
+         builds the chip strip in `#toolbar-cats` from these same elements.
+         `.group.quick` groups stay visible in every layout. -->
+    <header id="toolbar">
+      <span class="brand">
+        <span class="brand-full">Syntax&nbsp;Tree&nbsp;Plus</span>
+        <span class="brand-short" aria-hidden="true">🌳</span>
+      </span>
+
+      <div class="group quick">
+        <button data-action="undo" title="Undo (Ctrl+Z)">↶<span class="lbl"> Undo</span></button>
+        <button data-action="redo" title="Redo (Ctrl+Y)">↷<span class="lbl"> Redo</span></button>
+      </div>
+
+      <div class="group" data-cat="insert" data-cat-label="Insert" data-cat-icon="＋">
+        <button data-action="child" title="Add child node — a category label, kept as [X] (n)">+ Child</button>
+        <button data-action="text" title="Add child word — a lexical item or symbol (a)">+ Text</button>
+        <button data-action="sib-before" title="Add sibling before (Shift+S)">+ Sib ◀</button>
+        <button data-action="sib-after" title="Add sibling after (s)">+ Sib ▶</button>
+        <button data-action="add-tree" title="Add another tree to this tab (Shift+T)">+ Tree</button>
+      </div>
+
+      <div class="group" data-cat="edit" data-cat-label="Edit" data-cat-icon="✎">
+        <button data-action="rename" title="Rename node (e / Enter)">Rename</button>
+        <button data-action="toggle-word" title="Toggle the selected leaf between a word and a node (Shift+W)">↔ Word/Node</button>
+        <button data-action="triangle" title="Toggle triangle (t)">△ Triangle</button>
+        <button data-action="wrap" title="Wrap in new parent (w)">Wrap</button>
+        <button data-action="delete" title="Delete node (Del)">Delete</button>
+        <button data-action="delete-tree" title="Delete the selected tree (Shift+D)">Del Tree</button>
+      </div>
+
+      <div class="group" data-cat="clipboard" data-cat-label="Clipboard" data-cat-icon="✂">
+        <button data-action="copy" title="Copy subtree (c)">Copy</button>
+        <button data-action="cut" title="Cut subtree (x)">Cut</button>
+        <button data-action="paste" title="Paste as last child (v)">Paste</button>
+        <button data-action="paste-before" title="Paste as sibling before selection">Paste ◀</button>
+        <button data-action="paste-after" title="Paste as sibling after selection (Shift+V)">Paste ▶</button>
+      </div>
+
+      <div class="group" data-cat="template" data-cat-label="Templates" data-cat-icon="⌸">
+        <button data-action="xbar" title="Expand to X-bar skeleton (b)">X-bar</button>
+        <button data-action="cptp" title="Expand to CP/TP clause skeleton (Shift+B)">CP/TP</button>
+        <button data-action="coordination" title="Wrap in a coordination (&amp;P) template">Coord</button>
+      </div>
+
+      <div class="group" data-cat="tools" data-cat-label="Tools" data-cat-icon="✥">
+        <button data-action="toggle-drag" title="Drag nodes to move them">✥ Move</button>
+        <button data-action="toggle-link" title="Draw a movement arrow between two words">⤳ Arrow</button>
+      </div>
+
+      <div class="group" data-cat="view" data-cat-label="View" data-cat-icon="⤢">
+        <button data-action="zoom-out" title="Zoom out (-)">－</button>
+        <button data-action="zoom-reset" title="Reset zoom to 100% (0)"><span id="zoom-label">100%</span></button>
+        <button data-action="zoom-in" title="Zoom in (+)">＋</button>
+        <button data-action="zoom-fit" title="Fit tree to view (f)">⤢ Fit</button>
+        <button data-action="toggle-align" title="Cycle alignment: top / words at bottom / bottom">⇅ Align</button>
+        <button data-action="toggle-boxes" title="Toggle node boxes">□ Boxes</button>
+        <button data-action="toggle-triangles" title="Toggle triangles for multi-word phrases">▽ Triangles</button>
+        <button data-action="toggle-theme" title="Toggle dark mode">◐ Theme</button>
+        <button data-action="pretty-print" title="Reformat the bracket notation pane across multiple indented lines (Shift+P)">¶ Pretty-print</button>
+      </div>
+
+      <!-- Export/Share carry inline SVG rather than a glyph: ⭳ (U+2B73) is
+           missing from the default font on most phones, where it rendered as
+           an empty box. An `<svg class="icon">` draws the same idea with no
+           font dependency and inherits `currentColor`, so it follows the theme
+           and the .active state like text did. -->
+      <div class="group quick right">
+        <button data-action="export" title="Export (download or copy)">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M12 3.5v11" />
+            <path d="m7.5 10 4.5 4.5 4.5-4.5" />
+            <path d="M4.5 16.5V19a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5v-2.5" />
+          </svg><span class="lbl"> Export</span>
+        </button>
+        <button data-action="share" title="Share a link to this tab">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <circle cx="18" cy="5" r="2.6" />
+            <circle cx="6" cy="12" r="2.6" />
+            <circle cx="18" cy="19" r="2.6" />
+            <path d="M8.3 10.7 15.7 6.4" />
+            <path d="m8.3 13.3 7.4 4.3" />
+          </svg><span class="lbl"> Share</span>
+        </button>
+        <button data-action="settings" title="Settings">⚙<span class="lbl"> Settings</span></button>
+        <button data-action="help" title="Keyboard shortcuts">?<span class="lbl"> Help</span></button>
+      </div>
+
+      <!-- Category chips (compact layout only) — filled by toolbar.ts. -->
+      <nav id="toolbar-cats" aria-label="Toolbar categories"></nav>
+    </header>
+
+    <nav id="tabbar" role="tablist" aria-label="Trees"></nav>
+
+    <main id="app">
+      <section id="tree-pane">
+        <div id="tree-container"></div>
+      </section>
+      <div id="divider" title="Drag to resize"></div>
+      <section id="text-pane">
+        <label class="pane-label" for="text-input">Bracket notation (jsSyntaxTree-compatible)</label>
+        <div id="editor-wrap">
+          <div id="text-highlights" aria-hidden="true"></div>
+          <textarea
+            id="text-input"
+            spellcheck="false"
+            autocomplete="off"
+            autocapitalize="off"
+          ></textarea>
+        </div>
+        <div id="parse-error"></div>
+        <!-- No round-trip hazards remain (adjacent terminals are quoted), so
+             this stays empty and hidden; kept as a slot for future warnings. -->
+        <div id="round-trip-warning"></div>
+      </section>
+    </main>
+
+    <!-- Panels are head + scroller (`.modal-body.paneled`): the title row is a
+         flex item that doesn't scroll, and only `.modal-scroll` moves. The head
+         used to be `position: sticky` inside the scroller, where its negative
+         margins put the *margin* box against the scrollport top and left a
+         24px transparent strip above it — content scrolled through the gap on
+         a phone. -->
+    <div id="help-modal" class="modal">
+      <div class="modal-body paneled">
+        <div class="modal-head">
+          <h2>Syntax Tree Plus — Help</h2>
+          <button
+            type="button"
+            class="modal-close"
+            data-action="close-help"
+            title="Close"
+            aria-label="Close help"
+          >
+            ×
+          </button>
+        </div>
+        <div class="modal-scroll">
+          <p>
+            Edit the tree with the toolbar / keyboard, <em>or</em> type
+            <strong>labelled bracket notation</strong> in the right-hand pane.
+            Both stay in sync.
+          </p>
+          <h3>Notation</h3>
+          <ul class="notation">
+            <li><code>[S [NP the cat] [VP slept]]</code> — brackets nest structure.</li>
+            <li>
+              Write <strong>several trees</strong> one after another —
+              <code>[S …] [S …]</code> — and they're all drawn on the canvas.
+            </li>
+            <li>Unclosed brackets are auto-closed as you type.</li>
+            <li>Select text and press <code>[</code> to wrap it in brackets.</li>
+            <li>
+              <code>[N cat]</code> is <code>N</code> over the <strong>word</strong>
+              <em>cat</em> (italic); <code>[NP [N]]</code> is a bare
+              <strong>node</strong> — a category or symbol with nothing under it.
+              Brackets are what tell them apart, so use <strong>+ Text</strong> for
+              a word, <strong>+ Child</strong> for a node, or
+              <strong>Word/Node</strong> to flip a leaf.
+            </li>
+            <li><code>[NP the big cat]</code> — a multi-word terminal draws a <strong>triangle</strong>.</li>
+            <li><code>NP_1</code> — <code>_</code> adds a <strong>subscript</strong> (co-index).</li>
+            <li><code>X^0</code> — <code>^</code> adds a <strong>superscript</strong>.</li>
+            <li>
+              <code>[NP the big cat_1]</code> — scripts attach to the
+              <strong>whole span</strong>, so a triangle can carry a movement index.
+            </li>
+            <li>
+              <code>[NP "the" "cat"]</code> — quote each word to keep two terminals
+              <strong>separate</strong>; <code>[NP the cat]</code> is one span
+              covering both.
+            </li>
+            <li>
+              <code>"…"</code> makes everything inside <strong>literal</strong>, so
+              a label can contain a space, <code>_</code>, <code>^</code> or a
+              bracket: <code>[N "a_b"]</code>, <code>["my node" x]</code>. There is
+              no backslash escape (matching jsSyntaxTree).
+            </li>
+            <li>
+              <code>[DP t -&gt; 1]</code> — <code>-&gt;</code> draws a
+              <strong>movement arrow</strong> to terminal <strong>column 1</strong>
+              (terminals counted left to right). <code>&lt;-</code> points the
+              other way, <code>&lt;&gt;</code> both ways. Arrows go on terminals,
+              and the number needs a space in front of it.
+            </li>
+            <li>
+              A subscript is <em>only</em> a label: <code>John_1 … his_1</code>
+              draws no arrow. Say arrows with <code>-&gt;</code>.
+            </li>
+          </ul>
+          <h3>Keyboard</h3>
+          <p class="tip">
+            Remappable shortcuts can be changed in
+            <strong>⚙ Settings → Keyboard shortcuts</strong>.
+          </p>
+          <table class="keys">
+            <tbody id="help-keys"></tbody>
+          </table>
+          <h3>Inserting &amp; moving</h3>
+          <ul class="notation">
+            <li>
+              <strong>Insert in the middle:</strong> select the node that should
+              come after your new one and use <strong>+ Sib ◀</strong> (before),
+              or select the one before it and use <strong>+ Sib ▶</strong> (after).
+            </li>
+            <li>
+              <strong>Paste</strong> drops the copied subtree in as the last
+              child of the selection. <strong>Paste ◀ / Paste ▶</strong> place it
+              as a sibling <em>before</em> / <em>after</em> the selection — so to
+              paste into the middle, select the node it should sit next to and use
+              ◀ or ▶ (exactly like the insert buttons).
+            </li>
+            <li>
+              <strong>✥ Move mode:</strong> toggle it on, then drag any node onto
+              another to re-parent it. A caret shows exactly where it will land
+              among the target's children. You can't drop a node into itself.
+            </li>
+            <li>
+              <strong>⤳ Arrow mode:</strong> toggle it on, click a word (the
+              source), then click a second word (the target) to draw a movement
+              arrow. Picking the same pair again cycles the arrowheads
+              (<code>-&gt;</code>, <code>&lt;-</code>, <code>&lt;&gt;</code>, then
+              off). Click the source again, or click empty space, to cancel.
+            </li>
+            <li>
+              <strong>Templates:</strong> X-bar, CP/TP, and Coord expand the
+              selected node into a standard skeleton (X-bar: Spec/X'/Compl;
+              CP/TP: a full clause spine; Coord: <code>&amp;P</code> with two
+              conjuncts around a coordinator).
+            </li>
+          </ul>
+          <h3>Trees &amp; view</h3>
+          <ul class="notation">
+            <li>
+              <strong>Several trees in one tab:</strong> a tab holds a whole
+              document, so it can carry more than one tree — useful for a set of
+              examples that belong together, or a before/after pair.
+              <strong>+ Tree</strong> (<code>Shift+T</code>) adds one after the selected
+              tree, <strong>Del Tree</strong> (<code>Shift+D</code>) removes it
+              (undoable), and on a <em>root</em> node <code>←</code> /
+              <code>→</code> step between trees while
+              <code>Shift</code>+<code>←</code>/<code>→</code> reorder them. Every
+              edit command applies to the tree you have selected; exports cover
+              all of them. Choose side-by-side or stacked layout in
+              <strong>⚙ Settings</strong>.
+            </li>
+            <li>
+              <strong>Tabs:</strong> the bar under the toolbar holds several named
+              documents. <strong>+</strong> adds one, <strong>⧉</strong>
+              duplicates the current one, double-click a tab to rename it, and
+              <strong>×</strong> closes it — with a <em>Reopen</em> button on the
+              message that follows, so a close is never final. Drag a tab
+              sideways to reorder it. Each tab keeps its own undo history.
+            </li>
+            <li>
+              <strong>Switching tabs:</strong> <code>Ctrl</code>+<code>1</code>…<code>9</code>
+              jumps straight to one (<code>9</code> = last), and
+              <code>Ctrl</code>+<code>Alt</code>+<code>←</code>/<code>→</code>
+              steps through them. Both work while you're typing in the text pane.
+            </li>
+            <li>
+              <strong>Half-finished text is kept:</strong> if what's in the text
+              pane doesn't parse yet, the tab holds on to it (marked with a
+              <strong>•</strong>) instead of discarding it when you switch away —
+              the tree on the canvas stays at the last version that parsed.
+            </li>
+            <li>
+              <strong>On a phone:</strong> the toolbar collapses to a row of
+              category chips — <em>Insert</em>, <em>Edit</em>,
+              <em>Clipboard</em>, <em>Templates</em>, <em>Tools</em>,
+              <em>View</em>. Tap one to show just those buttons; tap it again to
+              hide the row and give the screen back to the tree. Undo/redo and
+              Export/Share/Settings/Help stay put.
+            </li>
+            <li>
+              <strong>Zoom &amp; pan:</strong> use the ＋ / － / Fit buttons (or
+              <code>+</code> / <code>=</code> / <code>-</code> / <code>0</code> /
+              <code>f</code>), <code>Ctrl</code>/<code>⌘</code>+scroll to zoom
+              toward the pointer, and drag empty canvas to pan.
+            </li>
+            <li>
+              <strong>Export:</strong> the download button opens one dialog —
+              pick PNG, SVG or LaTeX, then download or copy to the clipboard.
+              PNG adds a scale and a transparent-background option; you can
+              export the current tab, all of them, or a range like
+              <code>1-3,5</code>. Several tabs save as one file each, named
+              after the tab; LaTeX can instead combine them into a single
+              <code>.tex</code>.
+            </li>
+            <li>
+              <strong>Share:</strong> the share button builds a link that
+              carries the current tab's document and offers to copy it. The
+              address bar itself is left alone — the link is made when you ask
+              for one, so it can't go stale behind your back — and opening
+              someone's link adds their tree as a new tab beside your own.
+            </li>
+          </ul>
+          <p class="tip">
+            Tip: when renaming, type the full token including scripts, e.g.
+            <code>DP_1</code> or <code>C^0</code>.
+          </p>
+          <button data-action="close-help">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="export-modal" class="modal">
+      <div class="modal-body paneled">
+        <div class="modal-head">
+          <h2>Export</h2>
+          <button
+            type="button"
+            class="modal-close"
+            data-action="close-export"
+            title="Close"
+            aria-label="Close export"
+          >
+            ×
+          </button>
+        </div>
+        <div class="modal-scroll">
+
+          <div class="export-section">
+            <span class="export-legend">Format</span>
+            <div class="export-choices" id="export-format">
+              <label><input type="radio" name="export-format" value="png" checked /> PNG</label>
+              <label><input type="radio" name="export-format" value="svg" /> SVG</label>
+              <label><input type="radio" name="export-format" value="latex" /> LaTeX</label>
+            </div>
+          </div>
+
+          <div class="export-section" data-format="png">
+            <span class="export-legend">Options</span>
+            <div class="export-opts">
+              <label for="export-scale">Scale</label>
+              <select id="export-scale">
+                <option value="0.5">×0.5</option>
+                <option value="1" selected>×1</option>
+                <option value="2">×2</option>
+                <option value="4">×4</option>
+              </select>
+              <label class="export-check">
+                <input type="checkbox" id="export-transparent" /> Transparent background
+              </label>
+            </div>
+          </div>
+
+          <div class="export-section">
+            <span class="export-legend">Tabs</span>
+            <div class="export-choices" id="export-scope">
+              <label><input type="radio" name="export-scope" value="current" checked /> Current tab</label>
+              <label><input type="radio" name="export-scope" value="all" /> All tabs</label>
+              <label><input type="radio" name="export-scope" value="custom" /> Custom</label>
+            </div>
+            <input
+              type="text"
+              id="export-custom"
+              placeholder="e.g. 1-3,5"
+              aria-label="Tabs to export, e.g. 1-3,5"
+            />
+          </div>
+
+          <div class="export-section" data-format="latex" id="export-combine-row">
+            <span class="export-legend">LaTeX</span>
+            <label class="export-check">
+              <input type="checkbox" id="export-combine" checked /> Combine into one .tex file
+            </label>
+          </div>
+
+          <p class="tip" id="export-summary"></p>
+          <p class="export-error" id="export-error"></p>
+          <p class="export-note" id="export-copy-note"></p>
+
+          <div class="export-actions">
+            <button type="button" data-action="export-download" id="export-download">
+              Download
+            </button>
+            <button type="button" data-action="export-copy" id="export-copy">
+              Copy to clipboard
+            </button>
+            <button type="button" data-action="export-copy-image" id="export-copy-image">
+              Copy as Image
+            </button>
+            <button type="button" data-action="export-copy-code" id="export-copy-code">
+              Copy as Code
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="settings-modal" class="modal">
+      <div class="modal-body paneled">
+        <div class="modal-head">
+          <h2>Settings</h2>
+          <button
+            type="button"
+            class="modal-close"
+            data-action="close-settings"
+            title="Close"
+            aria-label="Close settings"
+          >
+            ×
+          </button>
+        </div>
+        <div class="modal-scroll">
+          <div class="shortcuts-header settings-header">
+            <h3>Display</h3>
+            <button type="button" data-action="reset-settings" class="shortcuts-reset">
+              Reset to defaults
+            </button>
+          </div>
+          <div class="settings-grid">
+            <label for="setting-font-size">Font size</label>
+            <input type="number" id="setting-font-size" min="8" max="40" step="1" />
+
+            <label for="setting-h-spacing">Horizontal spacing</label>
+            <input type="number" id="setting-h-spacing" min="4" max="120" step="2" />
+
+            <label for="setting-v-spacing">Vertical spacing</label>
+            <input type="number" id="setting-v-spacing" min="30" max="200" step="2" />
+
+            <label for="setting-edge-style">Edge style</label>
+            <select id="setting-edge-style">
+              <option value="straight">Straight</option>
+              <option value="curved">Curved</option>
+            </select>
+
+            <label for="setting-auto-subscript">Auto-subscript</label>
+            <input type="checkbox" id="setting-auto-subscript" />
+
+            <label for="setting-forest-layout">Multiple trees</label>
+            <select id="setting-forest-layout">
+              <option value="row">Side by side</option>
+              <option value="column">Stacked</option>
+            </select>
+
+            <label for="setting-node-color">Node color</label>
+            <div class="setting-color-row">
+              <input type="color" id="setting-node-color" />
+              <button type="button" data-action="reset-node-color">Reset</button>
+            </div>
+          </div>
+          <p class="tip">
+            <strong>Multiple trees</strong> chooses how the trees of one tab are
+            arranged on the canvas — left to right, or one under another.
+          </p>
+          <p class="tip">
+            <strong>Auto-subscript</strong> numbers repeated non-terminal node
+            labels (NP → NP₁, NP₂) for display only — it isn't written into the
+            bracket notation. Terminals (words) and nodes you've subscripted
+            yourself are left as-is.
+          </p>
+          <p class="tip" id="settings-color-hint">
+            Select a node in the tree to give it a custom color.
+          </p>
+
+          <div class="shortcuts-header">
+            <h3>Keyboard shortcuts</h3>
+            <button type="button" data-action="reset-shortcuts" class="shortcuts-reset">
+              Reset to defaults
+            </button>
+          </div>
+          <p class="tip">
+            Click a key, then press the new one. Navigation keys (arrows,
+            undo/redo, tab switching, Esc) are fixed — pressing one is refused
+            rather than accepted and then ignored.
+          </p>
+          <div id="shortcut-list" class="shortcut-list"></div>
+
+          <button data-action="close-settings">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Share: the link is built on demand (the address bar is no longer a
+         live mirror of the document), shown as text and copied on request. -->
+    <div id="share-modal" class="modal">
+      <div class="modal-body paneled">
+        <div class="modal-head">
+          <h2>Share</h2>
+          <button
+            type="button"
+            class="modal-close"
+            data-action="close-share"
+            title="Close"
+            aria-label="Close share"
+          >
+            ×
+          </button>
+        </div>
+        <div class="modal-scroll">
+          <label class="share-label" for="share-url">Link to this tab</label>
+          <textarea id="share-url" class="share-url" readonly rows="3" spellcheck="false"></textarea>
+          <p class="tip" id="share-note"></p>
+          <div class="share-actions">
+            <button type="button" data-action="share-copy" id="share-copy">
+              Copy link
+            </button>
+            <button type="button" class="secondary" data-action="close-share">Close</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="scripts/main.js"></script>
+  </body>
+</html>

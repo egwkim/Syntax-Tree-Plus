@@ -1,0 +1,512 @@
+import { settings } from "./settings.js";
+import { applyAutoSubscripts } from "./edit.js";
+const SVG_NS = "http://www.w3.org/2000/svg";
+// Off-screen canvas for measuring the base label (excluding scripts).
+const measureCanvas = document.createElement("canvas");
+const measureCtx = measureCanvas.getContext("2d");
+function baseTextWidth(node) {
+    measureCtx.font = `${settings.label.fontSize}px ${settings.label.fontFamily}`;
+    return measureCtx.measureText(node.label).width;
+}
+const el = (name) => document.createElementNS(SVG_NS, name);
+function attr(node, attrs) {
+    for (const k in attrs)
+        node.setAttribute(k, String(attrs[k]));
+}
+/** Pass 1 for a single tree: measure, position every node, and bound the result. */
+function layoutTree(tree, margin) {
+    const { height, verticalSpacing, horizontalSpacing } = settings.node;
+    // Compute auto-subscripts (if enabled) before measuring, so their width is
+    // reflected in layout. Writes only the transient `autoSubscript` field.
+    applyAutoSubscripts(tree, settings.autoSubscript);
+    tree.calculateWidths();
+    tree.recomputeDepth();
+    const topMargin = margin + height / 2;
+    const maxLeafDepth = tree.maxLeafDepth();
+    const bottomRowY = topMargin + maxLeafDepth * verticalSpacing;
+    const rowDepth = alignmentDepths(tree, maxLeafDepth);
+    const layout = (node, centerX) => {
+        node.x = centerX;
+        node.y = topMargin + (rowDepth.get(node) ?? node.depth) * verticalSpacing;
+        if (node.children.length > 0) {
+            let childX = centerX - node.width / 2;
+            node.children.forEach((child) => {
+                const childCenter = childX + child.width / 2;
+                layout(child, childCenter);
+                childX += child.width + horizontalSpacing;
+            });
+        }
+    };
+    layout(tree.root, margin + tree.root.width / 2);
+    let minX = Infinity, maxX = -Infinity, maxY = -Infinity;
+    tree.root.walk((n) => {
+        const halfBox = n.textWidth / 2 + settings.node.padding;
+        minX = Math.min(minX, n.x - halfBox);
+        maxX = Math.max(maxX, n.x + halfBox);
+        maxY = Math.max(maxY, n.y + height / 2);
+    });
+    // Reserve room beneath the tree for movement arrows — as much as the curves
+    // actually reach, which depends on what each one spans.
+    const arrows = collectArrows(tree);
+    const arrowBottom = assignArrowDips(tree, arrows, height);
+    const arrowRoom = Math.max(0, arrowBottom - maxY + 12);
+    return {
+        tree,
+        minX,
+        maxX,
+        maxY,
+        bottomRowY,
+        arrows,
+        width: maxX - minX + margin * 2,
+        height: maxY + margin + arrowRoom,
+    };
+}
+/**
+ * Pass 2 for a single tree: draw it into a `<g>` shifted to `(offsetX, offsetY)`
+ * on the shared canvas. The tree's own coordinates are untouched — only the
+ * group's transform places it — so hit-testing, drag targets and the inline
+ * editor keep working off `getBoundingClientRect` as before.
+ *
+ * `groupLabel` names the tree for assistive tech when a document holds more
+ * than one. With a single tree the wrapper is `role="none"`, which drops it
+ * from the accessibility tree and leaves the node groups as direct treeitems of
+ * the enclosing `role="tree"`, exactly as before trees could be composed.
+ */
+function drawTree(box, opts, offsetX, offsetY, groupLabel, tabStop) {
+    const { tree } = box;
+    const g = el("g");
+    attr(g, { transform: `translate(${offsetX}, ${offsetY})` });
+    if (groupLabel)
+        attr(g, { role: "group", "aria-label": groupLabel });
+    else
+        attr(g, { role: "none" });
+    const edgesG = el("g");
+    const trianglesG = el("g");
+    const arrowsG = el("g");
+    attr(edgesG, { "aria-hidden": "true" });
+    attr(trianglesG, { "aria-hidden": "true" });
+    attr(arrowsG, { "aria-hidden": "true" });
+    g.appendChild(edgesG);
+    g.appendChild(trianglesG);
+    g.appendChild(arrowsG);
+    tree.root.walk((node) => {
+        node.children.forEach((child) => {
+            if (child.isWord && child.triangle && settings.showTriangles) {
+                drawTriangle(trianglesG, node, child);
+            }
+            else {
+                drawEdge(edgesG, node, child);
+            }
+        });
+    });
+    // Node groups are drawn last so labels sit on top of the edges.
+    tree.root.walk((node) => drawLabel(g, tree, node, opts, tabStop));
+    drawMovementArrows(arrowsG, box.arrows, settings.node.height);
+    return g;
+}
+/**
+ * Build an <svg> element for a document's trees. The SVG is sized to their
+ * combined bounding box (good for both on-screen display and export).
+ *
+ * Several trees are laid out side by side, or stacked, per
+ * `settings.forestLayout`; each is measured on its own and then translated into
+ * place, so one tree's shape never perturbs another's layout.
+ */
+export function buildSVG(trees, opts = {}) {
+    const margin = opts.margin ?? 24;
+    const gap = settings.forestGap;
+    const column = settings.forestLayout === "column";
+    const boxes = trees.map((t) => layoutTree(t, margin));
+    // Place each box along the main axis, tracking the extent of the other one.
+    let cursor = 0;
+    let cross = 0;
+    const offsets = boxes.map((b) => {
+        const at = cursor;
+        cursor += (column ? b.height : b.width) + gap;
+        cross = Math.max(cross, column ? b.width : b.height);
+        return at;
+    });
+    const main = Math.max(cursor - (boxes.length > 0 ? gap : 0), 1);
+    const width = Math.max(column ? cross : main, 1);
+    const totalHeight = Math.max(column ? main : cross, 1);
+    const svg = el("svg");
+    attr(svg, {
+        xmlns: SVG_NS,
+        viewBox: `0 0 ${width} ${totalHeight}`,
+        width,
+        height: totalHeight,
+    });
+    svg.style.display = "block";
+    svg.style.maxWidth = "none";
+    // Expose the tree(s) to assistive tech. Node groups are treeitems owned by
+    // this role="tree" element (through a per-tree group when there are several);
+    // the drawing layers are purely decorative and hidden from the a11y tree.
+    attr(svg, {
+        role: "tree",
+        "aria-label": (trees.length > 1 ? `${trees.length} syntax trees` : "Syntax tree") +
+            " — Tab to enter, arrow keys to navigate",
+    });
+    defineArrowhead(svg);
+    // One tab stop for the whole canvas: the selection (only ever in one tree),
+    // else the first tree's root.
+    const selected = trees.find((t) => t.selectedNode)?.selectedNode ?? null;
+    const tabStop = selected ?? trees[0]?.root ?? null;
+    boxes.forEach((b, i) => {
+        // Shift the box's left/top edge (content bound minus its margin) to its slot.
+        const x = (column ? 0 : offsets[i]) - (b.minX - margin);
+        const y = column ? offsets[i] : 0;
+        const label = boxes.length > 1 ? `Tree ${i + 1} of ${boxes.length}` : null;
+        svg.appendChild(drawTree(b, opts, x, y, label, tabStop));
+    });
+    return svg;
+}
+/**
+ * The row each node is drawn on under the current alignment mode — a port of
+ * jsSyntaxTree's `moveLeafsToBottom` / `moveParentsDown`. An absent entry means
+ * "stay at `node.depth`", so `top` needs no entries at all.
+ *
+ * `words` moves only words, which is the whole point of the mode: a childless
+ * *node* like `[N]` is a category, not a lexical item, so it belongs with the
+ * structure above rather than on the word row.
+ *
+ * One deliberate divergence in `bottom`: jsSyntaxTree only pushes down nodes
+ * that have children, so a childless node's depth there comes out `Infinity`
+ * (`moveParentsDown` takes a minimum over an empty child list) and the node
+ * vanishes. We put every leaf on the bottom row instead.
+ */
+function alignmentDepths(tree, bottomRow) {
+    const rows = new Map();
+    const mode = settings.leafAlignment;
+    if (mode === "top")
+        return rows;
+    if (mode === "words") {
+        tree.root.walk((n) => {
+            if (n.isWord)
+                rows.set(n, bottomRow);
+        });
+        return rows;
+    }
+    // "bottom": leaves sit on the bottom row and each parent is pushed down to
+    // just above its highest child. The root always lands back on row 0 — its
+    // longest chain of descendants is what defines `bottomRow` in the first place.
+    const assign = (node) => {
+        const row = node.isLeaf
+            ? bottomRow
+            : Math.min(...node.children.map(assign)) - 1;
+        rows.set(node, row);
+        return row;
+    };
+    assign(tree.root);
+    return rows;
+}
+function drawEdge(g, parent, child) {
+    const x1 = parent.x;
+    const y1 = parent.y + settings.node.height / 2 - 4;
+    const x2 = child.x;
+    const y2 = child.y - settings.node.height / 2 + 4;
+    if (settings.edge.style === "curved") {
+        const midY = (y1 + y2) / 2;
+        const path = el("path");
+        attr(path, {
+            d: `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`,
+            fill: "none",
+            stroke: settings.edge.color,
+            "stroke-width": settings.edge.width,
+        });
+        g.appendChild(path);
+        return;
+    }
+    const line = el("line");
+    attr(line, {
+        x1,
+        y1,
+        x2,
+        y2,
+        stroke: settings.edge.color,
+        "stroke-width": settings.edge.width,
+    });
+    g.appendChild(line);
+}
+function drawTriangle(g, parent, leaf) {
+    const halfBase = Math.max(leaf.textWidth / 2, 12);
+    const apexX = parent.x;
+    const apexY = parent.y + settings.node.height / 2 - 4;
+    const baseY = leaf.y - settings.node.height / 2 + 4;
+    const tri = el("path");
+    attr(tri, {
+        d: `M ${apexX} ${apexY} L ${leaf.x - halfBase} ${baseY} L ${leaf.x + halfBase} ${baseY} Z`,
+        fill: "none",
+        stroke: settings.triangle.color,
+        "stroke-width": settings.triangle.width,
+        "stroke-linejoin": "round",
+    });
+    g.appendChild(tri);
+}
+/** Human-readable name announced for a node by assistive tech. */
+function nodeAriaLabel(node) {
+    let s = node.label.trim() || "(blank)";
+    if (node.superscript)
+        s += ", superscript " + node.superscript;
+    const sub = node.displaySubscript();
+    if (sub)
+        s += ", subscript " + sub;
+    s += node.isWord ? ", word" : ", node";
+    return s;
+}
+function drawLabel(g, tree, node, opts, tabStop) {
+    // `isSelected` is the model's truth (drives ARIA + the roving tabindex);
+    // `selected` is whether to *draw* it, which an export turns off.
+    const isSelected = tree.selectedNode === node;
+    const selected = isSelected && (opts.showSelection ?? !!opts.interactive);
+    const group = el("g");
+    group.setAttribute("data-node-id", String(node.id));
+    // ARIA: every node is a treeitem, with level from its depth and the tree's
+    // selection state.
+    // No `aria-expanded`: nothing can collapse a subtree, and advertising an
+    // expanded/collapsed state that doesn't exist just misleads screen readers.
+    // Add it back if collapse/expand ever lands.
+    attr(group, {
+        role: "treeitem",
+        "aria-label": nodeAriaLabel(node),
+        "aria-level": node.depth + 1,
+        "aria-selected": String(isSelected),
+    });
+    if (opts.interactive) {
+        group.style.cursor = "pointer";
+        // Roving tabindex: exactly one node in the whole canvas is in the tab order
+        // — the selected one, or the first tree's root when nothing is selected —
+        // so Tab reaches the trees once and arrow keys take over from there. The
+        // tab stop is chosen across all trees (see `buildSVG`), or a document with
+        // three trees would offer three tab stops.
+        group.setAttribute("tabindex", node === tabStop ? "0" : "-1");
+    }
+    // A per-node color override (Settings panel) tints the label and, when node
+    // boxes are visible, the box outline. It wins even while selected — the user
+    // sets it via the panel with the node selected, so it must stay visible then,
+    // not just after deselecting. Unset nodes keep the dark selected-text color
+    // for contrast against the light selection fill.
+    const textFill = node.color || (selected ? "#0b2a4a" : settings.label.color);
+    if (settings.showNodeBoxes || selected) {
+        const box = el("rect");
+        const w = node.textWidth + settings.node.padding * 2;
+        attr(box, {
+            x: node.x - w / 2,
+            y: node.y - settings.node.height / 2,
+            width: w,
+            height: settings.node.height,
+            rx: settings.node.radius,
+            ry: settings.node.radius,
+            fill: selected ? settings.fill.selected : settings.fill.node,
+            stroke: selected
+                ? settings.fill.selectedStroke
+                : settings.showNodeBoxes
+                    ? node.color || "#bbb"
+                    : "none",
+            "stroke-width": 1.5,
+        });
+        group.appendChild(box);
+    }
+    const text = el("text");
+    attr(text, {
+        x: node.x,
+        y: node.y,
+        "text-anchor": "middle",
+        "dominant-baseline": "central",
+        "font-size": settings.label.fontSize,
+        "font-family": settings.label.fontFamily,
+        // Words are italicised, the way lexical items are set in running text;
+        // category labels — including childless ones like `[N]` — stay upright. A
+        // drawn triangle is its own visual cue, so an italicised span only skips
+        // italics when a triangle is actually being drawn (not just implied but
+        // suppressed by `showTriangles`).
+        "font-style": node.isWord && !(node.triangle && settings.showTriangles) ? "italic" : "normal",
+        fill: textFill,
+    });
+    text.textContent = node.label;
+    group.appendChild(text);
+    // Sub / superscripts, positioned just right of the base label.
+    const subscriptText = node.displaySubscript();
+    if (subscriptText || node.superscript) {
+        const bw = baseTextWidth(node);
+        const sx = node.x + bw / 2 + 1;
+        const scriptSize = settings.label.fontSize * 0.7;
+        if (subscriptText) {
+            const sub = el("text");
+            attr(sub, {
+                x: sx,
+                y: node.y + settings.label.fontSize * 0.35,
+                "text-anchor": "start",
+                "dominant-baseline": "central",
+                "font-size": scriptSize,
+                "font-family": settings.label.fontFamily,
+                fill: textFill,
+            });
+            sub.textContent = subscriptText;
+            group.appendChild(sub);
+        }
+        if (node.superscript) {
+            const sup = el("text");
+            attr(sup, {
+                x: sx,
+                y: node.y - settings.label.fontSize * 0.35,
+                "text-anchor": "start",
+                "dominant-baseline": "central",
+                "font-size": scriptSize,
+                "font-family": settings.label.fontFamily,
+                fill: textFill,
+            });
+            sup.textContent = node.superscript;
+            group.appendChild(sup);
+        }
+    }
+    if (opts.interactive && opts.onNodeClick) {
+        group.addEventListener("click", (e) => {
+            e.stopPropagation();
+            opts.onNodeClick(node, e);
+        });
+    }
+    g.appendChild(group);
+}
+/**
+ * The movement arrows of one tree.
+ *
+ * Arrows are **written**, not inferred: a word carries `-> N` and N names the
+ * target's terminal column (see `Arrow` in tree.ts). Nothing is derived from
+ * subscripts, so a co-index used for binding (`John_1 … his_1`) or for plain
+ * numbering draws no arrow — only what the notation actually says does.
+ *
+ * An arrow whose target sits in *another* tree of the document is skipped: each
+ * tree is laid out in its own coordinate space and drawn into its own group, so
+ * there's nowhere to put the curve. Columns are still counted document-wide, so
+ * such an arrow keeps its number and starts drawing the moment the two ends end
+ * up in one tree.
+ *
+ * Both ends are re-checked against *this* walk rather than trusted, because
+ * `Node.arrow.target` is a live reference that a GUI edit can invalidate
+ * without touching the arrow:
+ *
+ * - deleting the target detaches it, and `removeChild` leaves its `tree`
+ *   pointing at the tree it used to be in, so a `target.tree === tree` test
+ *   still passes while the node has no layout — the curve would be drawn to
+ *   stale coordinates, or to `NaN` if it was never positioned, which poisons
+ *   the box height and collapses the whole canvas;
+ * - either end can stop being a word (drag-reparenting onto it, `toggleWordNode`),
+ *   and a non-word is neither serialized with an arrow nor counted as a column,
+ *   so drawing one would put the canvas at odds with the text pane.
+ *
+ * In both cases `serializeAll` already drops the arrow, so the check is what
+ * keeps the drawing and the notation saying the same thing.
+ */
+export function collectArrows(tree) {
+    const present = new Set();
+    tree.root.walk((n) => present.add(n));
+    const arrows = [];
+    tree.root.walk((node) => {
+        if (!node.isWord)
+            return;
+        const target = node.arrow?.target;
+        if (!target || target === node)
+            return;
+        if (!target.isWord || !present.has(target))
+            return;
+        arrows.push({ from: node, to: target, ends: node.arrow.ends, dip: NaN });
+    });
+    return arrows;
+}
+/**
+ * Choose how deep each arrow bends below the tree, and report the lowest point
+ * any of the curves reaches.
+ *
+ * Two things set the depth, both borrowed from jsSyntaxTree's `makeArrowSetOn`:
+ * the arrow clears the deepest material it spans horizontally (so it never
+ * cuts through the terminals it passes under), and an arrow that *contains*
+ * another goes deeper still, so a chain of arrows through several landing sites
+ * nests instead of collapsing onto one line.
+ */
+function assignArrowDips(tree, arrows, height) {
+    if (arrows.length === 0)
+        return 0;
+    const nodes = [];
+    tree.root.walk((n) => nodes.push(n));
+    const span = (a) => [
+        Math.min(a.from.x, a.to.x),
+        Math.max(a.from.x, a.to.x),
+    ];
+    let lowest = 0;
+    arrows.forEach((arrow) => {
+        const [left, right] = span(arrow);
+        let bottom = Math.max(arrow.from.y, arrow.to.y);
+        nodes.forEach((n) => {
+            if (n.x >= left && n.x <= right)
+                bottom = Math.max(bottom, n.y);
+        });
+        const contained = arrows.filter((other) => {
+            if (other === arrow)
+                return false;
+            const [l, r] = span(other);
+            return l >= left && r <= right && r - l < right - left;
+        }).length;
+        arrow.dip = bottom + height / 2 + 34 + contained * 18;
+        // A cubic with both control points at `dip` only reaches three quarters of
+        // the way there; reserving the full dip would pad every export with empty
+        // space the drawing never uses.
+        const sy = arrow.from.y + height / 2;
+        const ty = arrow.to.y + height / 2;
+        lowest = Math.max(lowest, (sy + ty) / 8 + 0.75 * arrow.dip);
+    });
+    return lowest;
+}
+function drawMovementArrows(g, arrows, height) {
+    arrows.forEach(({ from, to, ends, dip }) => {
+        const sx = from.x;
+        const sy = from.y + height / 2;
+        const tx = to.x;
+        const ty = to.y + height / 2;
+        const path = el("path");
+        attr(path, {
+            d: `M ${sx} ${sy} C ${sx} ${dip}, ${tx} ${dip}, ${tx} ${ty}`,
+            fill: "none",
+            stroke: settings.movement.color,
+            "stroke-width": settings.movement.width,
+        });
+        // `->` heads at the target, `<-` at the source, `<>` at both. The tail
+        // marker is a mirrored copy rather than `orient="auto-start-reverse"`,
+        // which older renderers (and some SVG-to-PDF converters) ignore.
+        if (ends.to)
+            path.setAttribute("marker-end", "url(#arrowhead)");
+        if (ends.from)
+            path.setAttribute("marker-start", "url(#arrowtail)");
+        g.appendChild(path);
+    });
+}
+function defineArrowhead(svg) {
+    const defs = el("defs");
+    const heads = [
+        ["arrowhead", "M0,0 L6,3 L0,6 Z"],
+        ["arrowtail", "M6,0 L0,3 L6,6 Z"],
+    ];
+    heads.forEach(([id, d]) => {
+        const marker = el("marker");
+        attr(marker, {
+            id,
+            markerWidth: 8,
+            markerHeight: 8,
+            refX: id === "arrowhead" ? 6 : 0,
+            refY: 3,
+            orient: "auto",
+            markerUnits: "strokeWidth",
+        });
+        const p = el("path");
+        attr(p, { d, fill: settings.movement.color });
+        marker.appendChild(p);
+        defs.appendChild(marker);
+    });
+    svg.appendChild(defs);
+}
+/** Render a document's trees into a container element, wiring click selection. */
+export function render(trees, container, onNodeClick) {
+    container.innerHTML = "";
+    const svg = buildSVG(trees, { interactive: true, onNodeClick });
+    container.appendChild(svg);
+    return svg;
+}
