@@ -83,6 +83,25 @@ export const settings = {
 export type Settings = typeof settings;
 
 /**
+ * The ranges the numeric settings actually accept. Single source of truth: the
+ * Settings panel writes them onto its `<input>`s' `min`/`max` (so the markup
+ * can't drift from what the handlers enforce), the handlers refuse anything
+ * outside them, and `loadPrefs` clamps a persisted value to the same bounds.
+ * They used to live only in `index.html`, where they were advertised and never
+ * checked — a typed-in font size of 400 went straight into the layout.
+ */
+export const SETTING_LIMITS = {
+  fontSize: { min: 8, max: 40 },
+  horizontalSpacing: { min: 4, max: 120 },
+  verticalSpacing: { min: 30, max: 200 },
+} as const;
+
+/** Keep `v` inside a limit range. */
+export function clampSetting(v: number, limit: { min: number; max: number }): number {
+  return Math.min(limit.max, Math.max(limit.min, v));
+}
+
+/**
  * The drawing colors each theme implies. Single source of truth: the UI theme
  * toggle and the exporters both go through `applyThemeColors`, so an export
  * can't drift from what the theme actually draws. (The light values match the

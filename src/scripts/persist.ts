@@ -1,4 +1,4 @@
-import { settings, LeafAlignment } from "./settings.js";
+import { settings, LeafAlignment, SETTING_LIMITS, clampSetting } from "./settings.js";
 import type { StoredWorkspace } from "./tabs.js";
 
 const STORAGE_KEY = "syntax-tree-plus:doc";
@@ -8,12 +8,29 @@ const WORKSPACE_KEY = "syntax-tree-plus:workspace";
 const KEYMAP_KEY = "syntax-tree-plus:keymap";
 const TOOLBAR_CAT_KEY = "syntax-tree-plus:toolbar-cat";
 
-/** Mirror a bracket-notation doc into the URL fragment for shareable links. */
-export function updateFragment(text: string) {
-  const hash = "#t=" + encodeURIComponent(text);
-  if (location.hash !== hash) {
-    history.replaceState(null, "", hash);
-  }
+/**
+ * The shareable link for a document — what the Share dialog shows and copies.
+ *
+ * The fragment used to be *mirrored*: every edit rewrote the URL through
+ * `history.replaceState`, so a large tree meant a multi-KB address bar
+ * rewritten on each keystroke, and the link went stale-looking the moment the
+ * user typed again. Sharing is an explicit act now, so the URL is built on
+ * demand here and the address bar is left alone (see `clearFragment`).
+ */
+export function shareURL(text: string): string {
+  const { origin, pathname, search } = location;
+  return `${origin}${pathname}${search}#t=` + encodeURIComponent(text);
+}
+
+/**
+ * Drop a `#t=…` fragment from the address bar without reloading. Called once
+ * on boot, after the incoming document has been taken into a tab: leaving it
+ * there would make every later reload re-open that tab, and it can only go
+ * stale now that nothing keeps it up to date.
+ */
+export function clearFragment() {
+  if (!location.hash) return;
+  history.replaceState(null, "", location.pathname + location.search);
 }
 
 /** The document carried in the URL fragment (`#t=…`), if any — a shared link. */
@@ -29,14 +46,13 @@ export function fragmentDoc(): string | null {
   return null;
 }
 
-/** Persist the current active document (bracket notation) to localStorage + URL. */
+/** Persist the current active document (bracket notation) to localStorage. */
 export function saveDoc(text: string) {
   try {
     localStorage.setItem(STORAGE_KEY, text);
   } catch {
     /* storage may be unavailable (private mode) — ignore */
   }
-  updateFragment(text);
 }
 
 /**
@@ -53,15 +69,17 @@ export function loadDoc(): string | null {
   }
 }
 
-/** Persist the whole tab workspace and mirror the active doc into the URL. */
+/**
+ * Persist the whole tab workspace. Storage only: the URL fragment is *not*
+ * touched here (see `shareURL`) — this runs on every edit, and rewriting a
+ * multi-KB address bar per keystroke was pure churn.
+ */
 export function saveWorkspace(ws: StoredWorkspace) {
   try {
     localStorage.setItem(WORKSPACE_KEY, JSON.stringify(ws));
   } catch {
     /* ignore */
   }
-  const active = ws.tabs.find((t) => t.id === ws.activeId) ?? ws.tabs[0];
-  if (active) updateFragment(active.text);
 }
 
 /** Load the persisted workspace, or null if none / malformed. */
@@ -192,12 +210,21 @@ export function loadPrefs() {
   }
   if (typeof p !== "object" || p === null) return;
 
-  if (typeof p.fontSize === "number" && p.fontSize > 0)
-    settings.label.fontSize = p.fontSize;
-  if (typeof p.horizontalSpacing === "number" && p.horizontalSpacing >= 0)
-    settings.node.horizontalSpacing = p.horizontalSpacing;
-  if (typeof p.verticalSpacing === "number" && p.verticalSpacing >= 0)
-    settings.node.verticalSpacing = p.verticalSpacing;
+  // Clamped to the panel's own ranges (`SETTING_LIMITS`): a blob saved by an
+  // older build — or hand-edited — shouldn't be able to put a value into the
+  // layout that the Settings panel would now refuse.
+  if (typeof p.fontSize === "number" && Number.isFinite(p.fontSize))
+    settings.label.fontSize = clampSetting(p.fontSize, SETTING_LIMITS.fontSize);
+  if (typeof p.horizontalSpacing === "number" && Number.isFinite(p.horizontalSpacing))
+    settings.node.horizontalSpacing = clampSetting(
+      p.horizontalSpacing,
+      SETTING_LIMITS.horizontalSpacing
+    );
+  if (typeof p.verticalSpacing === "number" && Number.isFinite(p.verticalSpacing))
+    settings.node.verticalSpacing = clampSetting(
+      p.verticalSpacing,
+      SETTING_LIMITS.verticalSpacing
+    );
   if (p.edgeStyle === "straight" || p.edgeStyle === "curved")
     settings.edge.style = p.edgeStyle;
   // Alignment used to be a two-way switch; migrate the old spellings so a
