@@ -1,6 +1,13 @@
 import { Tree, Node, derivedTriangle } from "./tree.js";
 import { render } from "./render.js";
-import { settings, applyThemeColors, LeafAlignment } from "./settings.js";
+import {
+  settings,
+  applyThemeColors,
+  LeafAlignment,
+  SETTING_LIMITS,
+  clampSetting,
+  resetDisplaySettings,
+} from "./settings.js";
 import { parseAll, parseLabel } from "./parser.js";
 import { serializeAll, serializePrettyAll } from "./serialize.js";
 import { History } from "./history.js";
@@ -28,6 +35,8 @@ import {
   loadWorkspace,
   loadDoc,
   fragmentDoc,
+  clearFragment,
+  shareURL,
   saveKeymap,
   loadKeymap,
 } from "./persist.js";
@@ -86,6 +95,9 @@ export function startApp() {
   const helpModal = document.getElementById("help-modal") as HTMLElement;
   const settingsModal = document.getElementById("settings-modal") as HTMLElement;
   const exportModal = document.getElementById("export-modal") as HTMLElement;
+  const shareModal = document.getElementById("share-modal") as HTMLElement;
+  const shareUrlInput = document.getElementById("share-url") as HTMLTextAreaElement;
+  const shareNote = document.getElementById("share-note") as HTMLElement;
   const fontSizeInput = document.getElementById("setting-font-size") as HTMLInputElement;
   const hSpacingInput = document.getElementById("setting-h-spacing") as HTMLInputElement;
   const vSpacingInput = document.getElementById("setting-v-spacing") as HTMLInputElement;
@@ -957,6 +969,13 @@ export function startApp() {
     "close-export"() {
       exportModal.classList.remove("active");
     },
+    share() {
+      openShare();
+    },
+    "close-share"() {
+      shareModal.classList.remove("active");
+    },
+    "share-copy": () => copyShareLink(),
     "export-download": () => runExport("download"),
     "export-copy": () =>
       runExport(currentExportFormat() === "latex" ? "copy-code" : "copy-image"),
@@ -1005,6 +1024,13 @@ export function startApp() {
       if (!tree.selectedNode) return;
       delete tree.selectedNode.color;
       renderTree();
+    },
+    "reset-settings"() {
+      resetDisplaySettings();
+      savePrefs();
+      syncSettingsInputs();
+      renderTree();
+      flashStatus("Settings reset to defaults");
     },
     reverse() {
       const sel = tree.selectedNode;
@@ -1088,29 +1114,51 @@ export function startApp() {
     }
   }
 
-  fontSizeInput.addEventListener("input", () => {
-    const v = parseInt(fontSizeInput.value, 10);
-    if (Number.isFinite(v) && v > 0) {
-      settings.label.fontSize = v;
+  /**
+   * Wire one of the numeric settings to its `<input>`, honouring the range the
+   * field advertises. The bounds come from `SETTING_LIMITS` and are written
+   * onto the element, so the spinner, the handler and the persisted value can't
+   * disagree (the markup used to advertise 8–40 while the handler took any
+   * positive number, and a typed-in 400 went straight into the layout).
+   *
+   * Two events, deliberately: while *typing*, an out-of-range value is simply
+   * ignored — reaching 12 from an empty box goes through "1", which is below
+   * the minimum but obviously mid-edit — and on `change` (blur / Enter /
+   * spinner) the field is clamped, so it never keeps a value the tree isn't
+   * drawn with.
+   */
+  function bindNumberSetting(
+    input: HTMLInputElement,
+    limit: { min: number; max: number },
+    apply: (v: number) => void
+  ) {
+    input.min = String(limit.min);
+    input.max = String(limit.max);
+    const commit = (v: number) => {
+      apply(v);
       savePrefs();
       renderTree();
-    }
+    };
+    input.addEventListener("input", () => {
+      const v = parseInt(input.value, 10);
+      if (Number.isFinite(v) && v >= limit.min && v <= limit.max) commit(v);
+    });
+    input.addEventListener("change", () => {
+      const raw = parseInt(input.value, 10);
+      const v = Number.isFinite(raw) ? clampSetting(raw, limit) : limit.min;
+      input.value = String(v);
+      commit(v);
+    });
+  }
+
+  bindNumberSetting(fontSizeInput, SETTING_LIMITS.fontSize, (v) => {
+    settings.label.fontSize = v;
   });
-  hSpacingInput.addEventListener("input", () => {
-    const v = parseInt(hSpacingInput.value, 10);
-    if (Number.isFinite(v) && v >= 0) {
-      settings.node.horizontalSpacing = v;
-      savePrefs();
-      renderTree();
-    }
+  bindNumberSetting(hSpacingInput, SETTING_LIMITS.horizontalSpacing, (v) => {
+    settings.node.horizontalSpacing = v;
   });
-  vSpacingInput.addEventListener("input", () => {
-    const v = parseInt(vSpacingInput.value, 10);
-    if (Number.isFinite(v) && v >= 0) {
-      settings.node.verticalSpacing = v;
-      savePrefs();
-      renderTree();
-    }
+  bindNumberSetting(vSpacingInput, SETTING_LIMITS.verticalSpacing, (v) => {
+    settings.node.verticalSpacing = v;
   });
   edgeStyleSelect.addEventListener("change", () => {
     settings.edge.style = edgeStyleSelect.value as "straight" | "curved";
@@ -1178,7 +1226,11 @@ export function startApp() {
   });
   settingsModal.addEventListener("click", (e) => {
     if (e.target === settingsModal) {
-      settingsModal.classList.remove("active");
+      // Close through the action, not by dropping the class: closing also has
+      // to disarm a pending rebind. Clicking the backdrop used to skip that,
+      // and the next keypress *anywhere* — the text pane included — was
+      // swallowed and bound to whichever row was armed.
+      actions["close-settings"]();
       return;
     }
     const btn = (e.target as Element).closest("button");
@@ -1430,14 +1482,16 @@ export function startApp() {
     const typing =
       target.tagName === "INPUT" || target.tagName === "TEXTAREA";
 
-    // Global shortcuts that work even while typing.
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+    // Global shortcuts that work even while typing. `!e.altKey`, because the
+    // tab commands live on Ctrl+Alt+… — without it Ctrl+Alt+Z was eaten here
+    // and `reopen-tab` could never fire.
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "z") {
       e.preventDefault();
       if (e.shiftKey) actions.redo();
       else actions.undo();
       return;
     }
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "y") {
       e.preventDefault();
       actions.redo();
       return;
@@ -1489,12 +1543,15 @@ export function startApp() {
       e.key === "Escape" &&
       (helpModal.classList.contains("active") ||
         settingsModal.classList.contains("active") ||
-        exportModal.classList.contains("active"))
+        exportModal.classList.contains("active") ||
+        shareModal.classList.contains("active"))
     ) {
       e.preventDefault();
       helpModal.classList.remove("active");
-      settingsModal.classList.remove("active");
+      // Through the action, so a pending rebind is disarmed with it.
+      actions["close-settings"]();
       exportModal.classList.remove("active");
+      shareModal.classList.remove("active");
       return;
     }
     if (typing) return; // don't hijack while editing text
@@ -1897,6 +1954,90 @@ export function startApp() {
     const btn = (e.target as Element).closest("button");
     const action = btn?.getAttribute("data-action");
     if (action && actions[action]) actions[action]();
+  });
+
+  // ---- share dialog ---------------------------------------------------
+  //
+  // The URL fragment is no longer a live mirror of the document (it was
+  // rewritten on every keystroke — see `persist.ts`), so sharing is an explicit
+  // act: this dialog builds the link on demand and hands it over as text. The
+  // address bar is deliberately left untouched, since a link written there
+  // would go stale with the very next edit.
+
+  function openShare() {
+    // The pane may hold edits the tab hasn't taken yet; park them first so the
+    // link carries what's on screen.
+    flushActiveText();
+    const text = workspace.active?.text ?? serializeAll(trees);
+    const url = shareURL(text);
+    shareUrlInput.value = url;
+    // Long documents make long links. Say so here rather than letting the
+    // paste get truncated somewhere downstream.
+    shareNote.textContent =
+      url.length > 2000
+        ? `This link is ${url.length} characters long. Some chat apps and older ` +
+          `browsers cut links off around 2000 — if it doesn't survive the trip, ` +
+          `export the document instead.`
+        : `The link carries this tab's document (“${workspace.active?.name ?? ""}”). ` +
+          `Opening it adds the tree as a new tab; it doesn't touch what the ` +
+          `other person already has.`;
+    shareModal.classList.add("active");
+    shareUrlInput.focus();
+    shareUrlInput.select();
+  }
+
+  async function copyShareLink() {
+    try {
+      if (!clipboardTextSupported()) {
+        throw new Error("Clipboard access isn't available in this browser.");
+      }
+      await navigator.clipboard.writeText(shareUrlInput.value);
+      flashStatus("Link copied");
+      shareModal.classList.remove("active");
+    } catch {
+      // Clipboard access can also be refused at click time (permissions, an
+      // insecure origin). Leave the link selected so Ctrl+C still works.
+      shareUrlInput.focus();
+      shareUrlInput.select();
+      flashStatus("Couldn't reach the clipboard — the link is selected, press Ctrl+C");
+    }
+  }
+
+  shareModal.addEventListener("click", (e) => {
+    if (e.target === shareModal) {
+      shareModal.classList.remove("active");
+      return;
+    }
+    const btn = (e.target as Element).closest("button");
+    const action = btn?.getAttribute("data-action");
+    if (action && actions[action]) actions[action]();
+  });
+  // Clicking into the box selects the whole link — it's one value, and a
+  // partial selection is never what someone wants from it.
+  shareUrlInput.addEventListener("focus", () => shareUrlInput.select());
+
+  /**
+   * A share link pasted into the address bar of an *already open* app changes
+   * only the fragment, so the browser doesn't reload and boot never runs. Take
+   * it exactly the way boot would — focus the tab that already holds that
+   * document, or open a new one — then clear the fragment again.
+   */
+  window.addEventListener("hashchange", () => {
+    const doc = fragmentDoc();
+    clearFragment(); // replaceState doesn't fire hashchange, so this can't loop
+    if (!doc || parseAll(doc).trees.length === 0) return;
+    flushActiveText();
+    const match = workspace.tabs.find((t) => t.text === doc);
+    if (match) {
+      workspace.setActive(match.id);
+    } else {
+      const tab = workspace.add(doc, "Shared");
+      ensureHistory(tab.id, tab.text);
+    }
+    cancelInlineEdit();
+    loadActiveTab();
+    saveWorkspace(workspace.toStored());
+    flashStatus("Opened the shared document");
   });
 
   // ---- tabs (multiple named trees) -----------------------------------
@@ -2334,6 +2475,13 @@ export function startApp() {
     "keydown",
     (e) => {
       if (!capturingFor) return;
+      // A second guard on the panel being open: an armed row that outlived its
+      // dialog (any close path that forgets to disarm) would otherwise eat the
+      // next keystroke of whatever the user does next.
+      if (!settingsModal.classList.contains("active")) {
+        capturingFor = null;
+        return;
+      }
       // Ignore lone modifier presses — wait for the actual key.
       if (["Shift", "Control", "Alt", "Meta"].includes(e.key)) return;
       e.preventDefault();
@@ -2346,7 +2494,14 @@ export function startApp() {
       const canonical = canonicalFromEvent(e);
       const conflict = rebind(capturingFor, canonical);
       if (conflict) {
-        flashStatus(`${displayKey(canonical)} is already used by "${conflict.label}"`);
+        // id "" is the reserved-key sentinel: a structural key `app.ts` handles
+        // before it ever consults the keymap, so binding it would be silently
+        // dead. Its label names what the key does instead of a command.
+        flashStatus(
+          conflict.id === ""
+            ? `${displayKey(canonical)} is reserved for ${conflict.label}`
+            : `${displayKey(canonical)} is already used by "${conflict.label}"`
+        );
       } else {
         saveKeymap(keymapOverrides());
         renderHelpKeys();
@@ -2407,6 +2562,10 @@ export function startApp() {
     if (match) workspace.setActive(match.id);
     else workspace.add(shared, "Shared");
   }
+  // The fragment has been taken into a tab (and is about to be saved), so drop
+  // it from the address bar: nothing keeps it up to date any more, and leaving
+  // it there would re-open the same tab on every later reload.
+  clearFragment();
 
   loadActiveTab();
   saveWorkspace(workspace.toStored());

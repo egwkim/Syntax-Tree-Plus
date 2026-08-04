@@ -83,6 +83,61 @@ export const settings = {
 export type Settings = typeof settings;
 
 /**
+ * A snapshot of the display settings' factory values, taken from the object
+ * literal above at module load — before `loadPrefs` (or anything else) ever
+ * mutates it. `resetDisplaySettings` restores exactly this set: the fields the
+ * Settings panel exposes plus the alignment/boxes/triangles toggles that live
+ * on the toolbar but are still part of the same persisted `prefs` blob.
+ * Deliberately excludes theme-derived colors (`label.color`/`edge.color`/
+ * `triangle.color` track the light/dark toggle, not a "default" of their own),
+ * per-node `color` overrides (document content, not an app setting), and
+ * `exportPrefs` (dialog state, reset has never covered it).
+ */
+const DISPLAY_DEFAULTS = {
+  fontSize: settings.label.fontSize,
+  horizontalSpacing: settings.node.horizontalSpacing,
+  verticalSpacing: settings.node.verticalSpacing,
+  edgeStyle: settings.edge.style,
+  leafAlignment: settings.leafAlignment,
+  showNodeBoxes: settings.showNodeBoxes,
+  showTriangles: settings.showTriangles,
+  autoSubscript: settings.autoSubscript,
+  forestLayout: settings.forestLayout,
+} as const;
+
+/** Put every display setting back to its factory value. */
+export function resetDisplaySettings() {
+  settings.label.fontSize = DISPLAY_DEFAULTS.fontSize;
+  settings.node.horizontalSpacing = DISPLAY_DEFAULTS.horizontalSpacing;
+  settings.node.verticalSpacing = DISPLAY_DEFAULTS.verticalSpacing;
+  settings.edge.style = DISPLAY_DEFAULTS.edgeStyle;
+  settings.leafAlignment = DISPLAY_DEFAULTS.leafAlignment;
+  settings.showNodeBoxes = DISPLAY_DEFAULTS.showNodeBoxes;
+  settings.showTriangles = DISPLAY_DEFAULTS.showTriangles;
+  settings.autoSubscript = DISPLAY_DEFAULTS.autoSubscript;
+  settings.forestLayout = DISPLAY_DEFAULTS.forestLayout;
+}
+
+/**
+ * The ranges the numeric settings actually accept. Single source of truth: the
+ * Settings panel writes them onto its `<input>`s' `min`/`max` (so the markup
+ * can't drift from what the handlers enforce), the handlers refuse anything
+ * outside them, and `loadPrefs` clamps a persisted value to the same bounds.
+ * They used to live only in `index.html`, where they were advertised and never
+ * checked — a typed-in font size of 400 went straight into the layout.
+ */
+export const SETTING_LIMITS = {
+  fontSize: { min: 8, max: 40 },
+  horizontalSpacing: { min: 4, max: 120 },
+  verticalSpacing: { min: 30, max: 200 },
+} as const;
+
+/** Keep `v` inside a limit range. */
+export function clampSetting(v: number, limit: { min: number; max: number }): number {
+  return Math.min(limit.max, Math.max(limit.min, v));
+}
+
+/**
  * The drawing colors each theme implies. Single source of truth: the UI theme
  * toggle and the exporters both go through `applyThemeColors`, so an export
  * can't drift from what the theme actually draws. (The light values match the

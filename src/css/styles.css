@@ -113,6 +113,26 @@ body {
   border-color: var(--accent);
 }
 
+/* Inline SVG icons (Export, Share). Sized in `em` so they track the button's
+   font size — including the compact toolbar, which scales the quick buttons up
+   for touch — and stroked with `currentColor` so they follow the theme and the
+   .active/:disabled states exactly as a text glyph did. */
+#toolbar .icon {
+  width: 1.15em;
+  height: 1.15em;
+  vertical-align: -0.19em;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+#toolbar button:has(.icon) {
+  /* The icon is a replaced-ish box on a text baseline; keep the button's own
+     line box from growing taller than the glyph-only buttons beside it. */
+  line-height: 1.2;
+}
+
 #zoom-label {
   display: inline-block;
   min-width: 3.2em;
@@ -514,6 +534,8 @@ body.link-mode #tree-container [data-node-id] {
   z-index: 100;
   align-items: center;
   justify-content: center;
+  /* Breathing room on a phone, where the panel is nearly full-height. */
+  padding: 12px;
 }
 .modal.active {
   display: flex;
@@ -525,34 +547,48 @@ body.link-mode #tree-container [data-node-id] {
   border-radius: 10px;
   padding: 24px 28px;
   width: min(560px, 92vw);
-  max-height: 85vh;
+  /* `%` of the padded backdrop, not `vh`: a mobile browser's dynamic toolbar
+     makes 85vh taller than what's actually on screen, which pushed the bottom
+     of the panel under the chrome. */
+  max-height: min(85vh, 100%);
   overflow: auto;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
 }
 .modal-body h2 {
   margin-top: 0;
 }
-/* Sticky title row so the × stays reachable however far the panel is scrolled.
-   Negative margins pull it out to the body's padding edges; the matching
-   padding keeps the text where it was, and top: 0 then pins it to the
-   scrollport's top edge with its own background hiding the content behind.
 
-   The bottom margin pays back the -24px at the top: without it the row's
-   painted box ends 24px below where flow thinks it does, so the next element
-   starts *underneath* the opaque background and loses its top 10px. That was
-   invisible while every panel opened on a tall first row, and clips anything
-   shorter (the export panel's section legends). */
+/* A *paneled* modal is a fixed title row plus one scroller, rather than one
+   scrolling box with a sticky head. The head was sticky before, with negative
+   margins pulling it out to the padding edges — but sticky pins the *margin*
+   box, so the painted row sat 24px below the scrollport's top edge and the
+   content scrolled visibly through the transparent strip above it (obvious on
+   a phone, where the panel is tall and the head is the only anchor). Making
+   the head a non-scrolling flex item removes the overlap entirely: there is
+   nothing behind it to show through. */
+.modal-body.paneled {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+.modal-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 14px 28px 24px;
+}
 .modal-head {
-  position: sticky;
-  top: 0;
-  z-index: 1;
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin: -24px -28px 24px;
-  padding: 24px 28px 8px;
+  padding: 16px 28px 10px;
+  border-bottom: 1px solid var(--border);
   background: var(--bg);
+  border-radius: 10px 10px 0 0;
 }
 .modal-head h2 {
   margin: 0;
@@ -603,7 +639,10 @@ body.link-mode #tree-container [data-node-id] {
   color: var(--muted);
   font-size: 13px;
 }
-.modal-body > button {
+/* The panel's own closing button. `.modal-scroll >` covers the paneled modals,
+   where the content moved one level in. */
+.modal-body > button,
+.modal-scroll > button {
   margin-top: 12px;
   padding: 8px 16px;
   border: none;
@@ -712,6 +751,54 @@ body.link-mode #tree-container [data-node-id] {
   display: inline-block;
 }
 
+/* ---- Share panel ---- */
+.share-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+/* A textarea, not an <input>: a share link for a real document is long, and
+   wrapping it shows the whole thing instead of a one-line peephole. Read-only
+   rather than disabled, so it can still be selected and copied by hand when
+   the clipboard API is unavailable. */
+.share-url {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+  word-break: break-all;
+}
+.share-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+.share-actions button {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  font-size: 14px;
+}
+.share-actions button.secondary {
+  background: var(--btn-bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
 /* ---- Settings panel ---- */
 .settings-grid {
   display: grid;
@@ -788,6 +875,13 @@ body.link-mode #tree-container [data-node-id] {
 .shortcuts-reset:hover {
   background: var(--btn-hover);
 }
+/* The display-settings header reuses `.shortcuts-header`'s look (same idea:
+   a section title beside its own "Reset to defaults"), but it opens the
+   panel — `.modal-scroll` already pads the top, so the header's own
+   margin-top would double it. */
+.settings-header {
+  margin-top: 0;
+}
 .shortcut-list {
   display: flex;
   flex-direction: column;
@@ -832,6 +926,24 @@ body.link-mode #tree-container [data-node-id] {
   /* Stack the two panes vertically; the divider becomes a horizontal handle. */
   #app {
     flex-direction: column;
+  }
+
+  /* Panels take the screen; the side padding is what a phone can least spare. */
+  .modal {
+    padding: 8px;
+  }
+  .modal-body {
+    width: 100%;
+    padding: 18px 16px;
+  }
+  .modal-head {
+    padding: 12px 16px 10px;
+  }
+  .modal-scroll {
+    padding: 12px 16px 18px;
+  }
+  .modal-head h2 {
+    font-size: 18px;
   }
   #tree-pane {
     flex: 0 0 55%;

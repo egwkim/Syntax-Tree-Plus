@@ -10,8 +10,10 @@
  *
  * A binding is a canonical string: optional modifiers joined by `+`, then the
  * key. Single-character keys are lower-cased with `shift` carrying the case
- * (so `n` and `Shift+N` are distinct and unambiguous); named keys keep their
- * `KeyboardEvent.key` spelling (`Delete`, `Enter`, `F2`, `ArrowUp`, …).
+ * (so `n` and `Shift+N` are distinct and unambiguous) — but only for letters,
+ * since on a punctuation key the shifted glyph *is* the key (`+` is Shift+=,
+ * and "Shift++" would name nothing). Named keys keep their `KeyboardEvent.key`
+ * spelling (`Delete`, `Enter`, `F2`, `ArrowUp`, …).
  */
 
 export interface CommandDef {
@@ -59,8 +61,10 @@ export const COMMANDS: CommandDef[] = [
   { id: "duplicate-tab", label: "Duplicate this tab", defaultKey: "Ctrl+Alt+d", extraKeys: ["Meta+Alt+d"], category: "Tabs", global: true },
   { id: "reopen-tab", label: "Reopen the last closed tab", defaultKey: "Ctrl+Alt+z", extraKeys: ["Meta+Alt+z"], category: "Tabs", global: true },
 
-  // View
-  { id: "zoom-in", label: "Zoom in", defaultKey: "=", category: "View", global: true },
+  // View. `+` is the key everyone reaches for and what the UI advertises, but
+  // it's the *shifted* `=` on most layouts, so the remappable binding is `=`
+  // and `+` (numpad, or Shift+= — see `canonicalFromEvent`) is a fixed alias.
+  { id: "zoom-in", label: "Zoom in", defaultKey: "=", extraKeys: ["+"], category: "View", global: true },
   { id: "zoom-out", label: "Zoom out", defaultKey: "-", category: "View", global: true },
   { id: "zoom-reset", label: "Reset zoom (100%)", defaultKey: "0", category: "View", global: true },
   { id: "zoom-fit", label: "Fit tree to view", defaultKey: "f", category: "View", global: true },
@@ -81,6 +85,45 @@ export const FIXED_KEYS: { keys: string; label: string; category: string }[] = [
   { keys: "Ctrl+Alt+← / →", label: "Previous / next tab (wraps around)", category: "Tabs" },
   { keys: "Ctrl+Tab / Ctrl+Shift+Tab", label: "Next / previous tab, where the browser allows it", category: "Tabs" },
 ];
+
+/**
+ * Keys the controller handles *before* it consults the keymap — the structural
+ * ones listed in `FIXED_KEYS`. They're not `COMMANDS` entries, so a conflict
+ * scan over `COMMANDS` alone can't see them: binding a command to `ArrowUp`,
+ * `Ctrl+z` or `Escape` used to be accepted and then silently never fire,
+ * because `app.ts`'s keydown handler returns before the keymap lookup.
+ * `reservedKey` is the list that check was missing; the label is what the user
+ * is told the key already does.
+ */
+const RESERVED_KEYS = new Map<string, string>();
+{
+  const reserve = (label: string, ...keys: string[]) => {
+    for (const k of keys) RESERVED_KEYS.set(k, label);
+  };
+  const arrows = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
+  reserve("moving the selection", ...arrows);
+  reserve("reordering siblings and trees", ...arrows.map((k) => "Shift+" + k));
+  reserve("deselecting and closing dialogs", "Escape");
+  // Ctrl and Meta are interchangeable in every one of these handlers (macOS),
+  // so both spellings are reserved.
+  for (const mod of ["Ctrl", "Meta"]) {
+    reserve("undo", `${mod}+z`);
+    reserve("redo", `${mod}+Shift+z`, `${mod}+y`, `${mod}+Shift+y`);
+    reserve(
+      "switching tabs",
+      `${mod}+Tab`,
+      `${mod}+Shift+Tab`,
+      `${mod}+Alt+ArrowLeft`,
+      `${mod}+Alt+ArrowRight`,
+      ...Array.from({ length: 9 }, (_, i) => `${mod}+${i + 1}`)
+    );
+  }
+}
+
+/** What a structural key is already used for, or null if it's free to bind. */
+export function reservedKey(canonical: string): string | null {
+  return RESERVED_KEYS.get(canonical) ?? null;
+}
 
 const byId = new Map(COMMANDS.map((c) => [c.id, c]));
 
@@ -126,12 +169,15 @@ export function commandForKey(canonical: string): CommandDef | null {
 
 /**
  * Rebind a command. Refuses a key already taken by a *different* command's
- * primary binding or fixed alias; returns the conflicting command (or a
- * sentinel with id `""` for a reserved fixed key) so the caller can explain,
- * or null on success.
+ * primary binding or fixed alias, and a structural key the controller handles
+ * itself (see `reservedKey`); returns the conflicting command — or a sentinel
+ * with id `""` for a reserved key — so the caller can explain, or null on
+ * success.
  */
 export function rebind(id: string, canonical: string): CommandDef | { id: ""; label: string } | null {
   if (!byId.has(id)) return null;
+  const reserved = reservedKey(canonical);
+  if (reserved) return { id: "", label: reserved };
   for (const c of COMMANDS) {
     if (c.id === id) continue;
     if (bindings[c.id] === canonical || (c.extraKeys && c.extraKeys.includes(canonical))) {
@@ -149,14 +195,34 @@ export function bindingToDefault(id: string) {
 
 /** Canonical binding string for a keydown event (see module doc). */
 export function canonicalFromEvent(e: KeyboardEvent): string {
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  // Shift only belongs in the binding when it picked between two keys of the
+  // same name — a letter's case. On a punctuation key the shifted glyph *is*
+  // `e.key` (`+` for Shift+=, `?` for Shift+/), so carrying the modifier too
+  // would spell a binding ("Shift++") that nothing types or renders.
+  const shiftNamesTheKey =
+    e.shiftKey && !(key.length === 1 && key.toLowerCase() === key.toUpperCase());
   const parts: string[] = [];
   if (e.ctrlKey) parts.push("Ctrl");
   if (e.metaKey) parts.push("Meta");
   if (e.altKey) parts.push("Alt");
-  if (e.shiftKey) parts.push("Shift");
-  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (shiftNamesTheKey) parts.push("Shift");
   parts.push(key);
   return parts.join("+");
+}
+
+/**
+ * Split a canonical binding into modifiers + key. `+` is both the separator
+ * and a bindable key (zoom in), so the trailing one is read as the key rather
+ * than blindly splitting: `Ctrl++` is Ctrl and `+`, not an empty key.
+ */
+function splitCanonical(canonical: string): { mods: string[]; key: string } {
+  if (canonical.endsWith("+")) {
+    return { mods: canonical.slice(0, -1).split("+").filter(Boolean), key: "+" };
+  }
+  const parts = canonical.split("+");
+  const key = parts.pop() ?? "";
+  return { mods: parts, key };
 }
 
 const KEY_DISPLAY: Record<string, string> = {
@@ -173,10 +239,9 @@ const KEY_DISPLAY: Record<string, string> = {
 
 /** Human-friendly rendering of a canonical binding, e.g. `Shift+n` → "Shift + N". */
 export function displayKey(canonical: string): string {
-  const parts = canonical.split("+");
-  const key = parts.pop() ?? "";
+  const { mods: rawMods, key } = splitCanonical(canonical);
   // "Meta" is the Command key everywhere it's reachable; spell it as such.
-  const mods = parts.map((m) => (m === "Meta" ? "⌘" : m));
+  const mods = rawMods.map((m) => (m === "Meta" ? "⌘" : m));
   const shown = KEY_DISPLAY[key] ?? (key.length === 1 ? key.toUpperCase() : key);
   return [...mods, shown].join(" + ");
 }

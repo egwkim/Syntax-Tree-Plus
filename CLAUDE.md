@@ -72,9 +72,9 @@ Pure model/logic modules with one controller wiring them to the DOM.
 | `export.ts` | File *builders*, not button handlers: `pngFile`/`svgFile`/`latexFile` turn a `Tree[]` into an `ExportFile` (blob + filename), `downloadFiles` saves a batch, `uniqueFilenames` de-duplicates tab names, and `copyPNG`/`copySVGImage`/`copySVGMarkup`/`copyLaTeX` write to the clipboard, and `clipboardImageSupported`/`clipboardTextSupported` feature-detect what the browser will accept. Each call takes one tab's trees — an image carries every tree of that tab as laid out, LaTeX emits one `forest` environment per tree. Always draws with the light palette — see the export-colors note below. |
 | `history.ts` | Undo/redo over document snapshots (bracket strings). One instance **per tab**. |
 | `tabs.ts` | `Workspace` model: an ordered list of named documents (`TabData` = id/name/`text` + an optional `draft`) + which is active. Pure model — no DOM, no history; add/insert/remove/duplicate/move/rename/switch and `toStored`/`fromStored`. `remove` returns the tab **and the index it sat at**, since putting one back also needs its undo history — which only the controller has, so the closed-tab stack lives there. `parseTabSelection` ("1-3,5" → indices) lives here too — the export dialog's tab picker, kept beside the model it indexes into and testable without a DOM. |
-| `keymap.ts` | Single source of truth for keyboard shortcuts: the command list (id/label/default key/extra aliases), user remappings, canonical key encoding, and lookup. The help table and the remap UI are both rendered from it, so they can't drift. |
-| `persist.ts` | Autosave to localStorage + shareable URL fragment (`#t=`): the tab **workspace** (`saveWorkspace`/`loadWorkspace`, active doc mirrored to `#t=`), the theme, the display prefs *and the export dialog's state* (`savePrefs`/`loadPrefs`), the keymap overrides (`saveKeymap`/`loadKeymap`) and the compact toolbar's open category (`saveToolbarCat`/`loadToolbarCat`). `loadDoc` remains to migrate a legacy single-doc save into a tab on boot — **localStorage only**, since an incoming `#t=` is a shared document that gets its own tab rather than replacing what this browser holds; `saveDoc` is now **unused** (the workspace blob replaced it) and only kept as its counterpart. |
-| `settings.ts` | Layout/style constants, the three-way `leafAlignment`, how several trees of one document are arranged (`forestLayout`/`forestGap`), the remembered `exportPrefs` (dialog state only — it draws nothing), theme colors. `THEME_COLORS` + `applyThemeColors` are the single source for the light/dark drawing palette (used by both the theme toggle and the exporters) — with one gap: the **selected** label's color is hardcoded in `drawLabel` (`#0b2a4a`) and `settings.label.selectedColor` is not read by anything. |
+| `keymap.ts` | Single source of truth for keyboard shortcuts: the command list (id/label/default key/extra aliases), user remappings, canonical key encoding, lookup, and the structural keys `rebind` refuses (`reservedKey`). The help table and the remap UI are both rendered from it, so they can't drift. |
+| `persist.ts` | Autosave to localStorage: the tab **workspace** (`saveWorkspace`/`loadWorkspace`), the theme, the display prefs *and the export dialog's state* (`savePrefs`/`loadPrefs`), the keymap overrides (`saveKeymap`/`loadKeymap`) and the compact toolbar's open category (`saveToolbarCat`/`loadToolbarCat`). The URL fragment is read-on-boot only: `fragmentDoc` takes an incoming `#t=` (a shared document, which gets its own tab rather than replacing what this browser holds), `clearFragment` drops it afterwards, and `shareURL` builds a link on demand for the Share dialog — nothing mirrors the document into the address bar as it's edited. `loadDoc` remains to migrate a legacy single-doc save into a tab on boot; `saveDoc` is **unused** (the workspace blob replaced it) and only kept as its counterpart. |
+| `settings.ts` | Layout/style constants, the three-way `leafAlignment`, how several trees of one document are arranged (`forestLayout`/`forestGap`), the remembered `exportPrefs` (dialog state only — it draws nothing), theme colors, and `SETTING_LIMITS`/`clampSetting` (the ranges the Settings panel's number inputs enforce and `loadPrefs` clamps to). `THEME_COLORS` + `applyThemeColors` are the single source for the light/dark drawing palette (used by both the theme toggle and the exporters) — with one gap: the **selected** label's color is hardcoded in `drawLabel` (`#0b2a4a`) and `settings.label.selectedColor` is not read by anything. |
 | `toolbar.ts` | Compact (small-screen) toolbar: builds the category chip strip from the toolbar's own `.group[data-cat]` elements and shows one group at a time. Owns the `body.compact-toolbar` switch. |
 | `app.ts` | Controller. Owns the document's `trees` (+ which is active) and the `Workspace`, wires toolbar/keyboard/drag/text pane, tabs, zoom/pan, inline editing, theme. |
 | `main.ts` | Entry point: `startApp()`. |
@@ -453,16 +453,86 @@ Pure model/logic modules with one controller wiring them to the DOM.
 - **Configurable shortcuts** (`keymap.ts`): the keydown handler resolves a
   *canonical* key string (`canonicalFromEvent`: modifiers + key, single chars
   lower-cased with `shift` carrying case) through `commandForKey`, then runs the
-  matching `actions[id]`. Structural keys (arrows, Shift+arrows, Ctrl+Z/Y, Esc)
-  stay hardcoded and non-remappable; everything else is a `COMMANDS` entry with a
-  remappable primary key (+ optional fixed aliases like `Enter`/`F2`). Zoom
-  commands are `global` (run without a selection). The Settings panel captures a
-  keypress to rebind (capture-phase listener); overrides persist via `saveKeymap`.
-  `rebind` refuses a key already taken by *another `COMMANDS` entry* — it does
-  **not** protect the hardcoded structural keys, so a command can currently be
-  bound to `ArrowUp`/`Ctrl+z`/`Escape` and silently never fire (see TODO).
-  **Add a shortcut by adding a `COMMANDS` entry**, not a `switch` case — the help
-  table and remap UI regenerate from the list.
+  matching `actions[id]`. Structural keys (arrows, Shift+arrows, Ctrl+Z/Y, tab
+  switching, Esc) stay hardcoded and non-remappable; everything else is a
+  `COMMANDS` entry with a remappable primary key (+ optional fixed aliases like
+  `Enter`/`F2`). Zoom commands are `global` (run without a selection). The
+  Settings panel captures a keypress to rebind (capture-phase listener);
+  overrides persist via `saveKeymap`. **Add a shortcut by adding a `COMMANDS`
+  entry**, not a `switch` case — the help table and remap UI regenerate from the
+  list. Three rules the rebind path enforces, each of which used to be a way to
+  end up with a binding that never fires:
+  - **The structural keys are reserved** (`reservedKey`, a list beside
+    `FIXED_KEYS`). `rebind` refuses them with the `{ id: "" }` sentinel its doc
+    comment always promised, and the toast names what the key does instead
+    ("↑ is reserved for moving the selection"). Scanning only `COMMANDS`
+    accepted `ArrowUp`/`Ctrl+z`/`Escape` and then let `app.ts` answer them
+    first. A `COMMANDS` default that collides with the list is a test failure
+    (`test/keymap.test.mjs`), so the two can't drift.
+  - **Undo/redo don't swallow `Alt`.** `app.ts` matches Ctrl/⌘+Z/Y with
+    `!e.altKey`, since the tab commands live on Ctrl+Alt+… — without it
+    `Ctrl+Alt+Z` (`reopen-tab`) was eaten by undo before the keymap saw it.
+  - **`Shift` is only part of a binding when it picks a letter's case.** On a
+    punctuation key the shifted glyph *is* `e.key` (`+` for Shift+=), so
+    `canonicalFromEvent` drops the modifier there — `Shift++` was a spelling
+    nothing typed or rendered, which is why zoom-in's advertised `+` did
+    nothing. `+` is now a fixed alias of `zoom-in` (primary: `=`), and
+    `displayKey` reads a trailing `+` as the key rather than the separator.
+- **An armed rebind can't outlive its panel.** Closing Settings *any* way
+  disarms it: the backdrop click runs the `close-settings` action rather than
+  just dropping the class, Escape goes through the same action, and the
+  capture-phase listener bails (clearing `capturingFor`) if the panel isn't
+  open. It swallows the next keypress by design — one that landed in the text
+  pane after a backdrop close used to be silently bound to whatever row was
+  armed.
+- **The numeric settings enforce the range they advertise.** `SETTING_LIMITS`
+  (`settings.ts`) is the one place the bounds live: `bindNumberSetting` writes
+  them onto the `<input>`, ignores an out-of-range value while *typing* (`1` on
+  the way to `12` is mid-edit, not a mistake) and clamps on `change`, and
+  `loadPrefs` clamps a persisted value to the same bounds. The markup's
+  `min`/`max` used to be decoration — the handlers took any `> 0`, so a
+  typed-in font size of 400 went straight into the layout.
+- **Display settings have their own "Reset to defaults"**, mirroring the
+  Keyboard shortcuts section right below it. `resetDisplaySettings`
+  (`settings.ts`) restores a snapshot (`DISPLAY_DEFAULTS`) taken from the
+  `settings` object literal at module load, before `loadPrefs` or anything
+  else ever mutates it — so the defaults can't drift from what the object
+  actually initializes to. Its scope is exactly the fields that ride in the
+  persisted `prefs` blob and represent a user *preference*: font size,
+  spacing, edge style, the alignment/boxes/triangles toggles (toolbar
+  buttons, but the same blob), auto-subscript and forest layout. It
+  deliberately leaves alone what isn't a preference in that sense: theme
+  colors (they track the light/dark toggle, not a default of their own),
+  per-node `color` overrides (document content — the per-node **Reset**
+  button beside Node color already covers the selected node), and
+  `exportPrefs` (dialog state, never in scope for this button).
+- **Sharing is an explicit act; the URL is not a mirror.** `#t=` used to be
+  rewritten by `saveWorkspace` on *every* edit (`history.replaceState` with the
+  whole document — multi-KB URLs per keystroke). Now nothing writes the address
+  bar during editing: the **Share** button (beside Export) builds the link on
+  demand with `shareURL(text)`, shows it as selectable text in `#share-modal`
+  and copies it on request. Boot still *reads* an incoming `#t=` — same rule as
+  before, a shared document lands in its own tab — and then calls
+  `clearFragment()`, because a fragment nothing keeps current would otherwise
+  re-open that tab on every later reload. A `hashchange` listener runs the same
+  adoption path, since a link pasted into the address bar of an already-open app
+  changes only the fragment and never reloads (`replaceState` doesn't fire
+  `hashchange`, so clearing it can't loop). `updateFragment` is gone; `saveDoc`
+  (already unused) no longer touches the URL either.
+- **Toolbar icons that must survive a phone are inline SVG**, not glyphs.
+  Export's `⭳` (U+2B73) is absent from the default font on most mobile
+  browsers, where it rendered as an empty box; `svg.icon` (Export, Share) draws
+  it with no font dependency, sized in `em` and stroked with `currentColor`, so
+  it still tracks the button's font size, the theme and the `.active` state.
+  Prefer this over an exotic codepoint for anything new in `.group.quick`.
+- **A modal is a head plus a scroller** (`.modal-body.paneled` > `.modal-head` +
+  `.modal-scroll`): the title row is a non-scrolling flex item and only the
+  content moves. The head was `position: sticky` with negative margins, but
+  sticky pins the *margin* box — so the painted row sat 24px below the
+  scrollport's top edge and content scrolled visibly through the transparent
+  strip above it (plainly wrong on a phone, where the panel is nearly
+  full-height). Keep new panels in that shape, and note `.modal-scroll > button`
+  is what styles a panel's own Close button now.
 - Module imports use explicit `.js` extensions (ESM output).
 - `id` on `Node` is a per-session counter, not persisted.
 - **Deliberately unwired exports.** Several exports exist with no caller and are
@@ -482,23 +552,6 @@ Bugs
       document's arrows survive SVG and PNG but vanish in `forest` output. Now
       that arrows are explicit (`Node.arrow`), each end can be given a `name=`
       and the arrow drawn with a `\draw[->]` in the environment's tikz layer.
-- [ ] **A command can be rebound onto a hardcoded key.** `rebind` only scans other
-      `COMMANDS` entries, so binding one to `ArrowUp`, `Ctrl+z` or `Escape` is
-      accepted and then dead — `app.ts` handles those before consulting the keymap
-      and returns. `rebind`'s own doc comment already promises a reserved-key
-      sentinel (`{ id: "" }`) that was never implemented: either implement it
-      against a list of the structural keys, or drop the comment.
-- [ ] **An armed rebind survives closing Settings by clicking the backdrop.** The
-      `close-settings` action clears `capturingFor`, but the modal's
-      `e.target === settingsModal` branch returns before reaching it, and the
-      capture-phase key listener doesn't check whether the panel is open — so the
-      next keypress *anywhere*, including inside the text pane, is swallowed and
-      bound to the armed command.
-- [ ] **Zoom in is documented as `+` but bound to `=`.** The button title in
-      `index.html` and the help modal both say `+`, while `COMMANDS` has `=` and
-      `canonicalFromEvent` renders Shift+= as `Shift++`, which matches nothing —
-      so pressing what the UI advertises does nothing. Add `+`/`Shift+=` as an
-      `extraKeys` alias, or fix the text.
 
 Robustness
 - [ ] **Accessibility outside the SVG.** The tree itself is a proper ARIA tree,
@@ -509,17 +562,19 @@ Robustness
       every tab in `#tabbar` is `tabIndex=0` where `role="tab"` wants a roving
       tabindex plus an `aria-controls` target, and `#divider` has no
       `role="separator"` or keyboard resize.
-- [ ] **URL fragment churn**: `updateFragment` runs `history.replaceState` with
-      the whole document on every edit, so large trees mean multi-KB URLs
-      rewritten per keystroke. Debounce it; consider compressing the payload.
+- [ ] **A long share link is still a long URL.** `shareURL` percent-encodes the
+      raw document, so a big document makes a link some chat apps truncate (the
+      dialog warns past 2000 characters). Compressing the payload — or a
+      shortening step — would lift the ceiling.
 - [ ] Extend the test suite: `make test` covers parser/serializer round-trips
       (`test/roundtrip.test.mjs`, `test/multitree.test.mjs`), movement arrows
       (`test/movement.test.mjs`, which also reaches `setArrow`/`clearArrow`/
       `nextArrowEnds`), the workspace model (`test/tabs.test.mjs`), the pure
       text-pane helpers (`test/brackets.test.mjs`: bracket matching,
-      matched-pair-at-caret, and the diff/index-mapping pair) and the export
-      dialog's pure parts (`test/export-select.test.mjs`), but the rest of
-      `edit.ts` and `keymap.ts` are still untested, and there's no Playwright
+      matched-pair-at-caret, and the diff/index-mapping pair), the export
+      dialog's pure parts (`test/export-select.test.mjs`) and the keymap
+      (`test/keymap.test.mjs`: reserved keys, conflicts, canonical/display
+      spelling), but `edit.ts` is still untested, and there's no Playwright
       smoke test in-repo yet (ad hoc runs against a `make serve` build are how
       the fixes above were checked).
 
@@ -532,10 +587,7 @@ Features
       font choice matters for publication figures.
 - [ ] **Toolbar actions with no `COMMANDS` entry** (`coordination`,
       `paste-before`, `toggle-align`, `toggle-boxes`, `toggle-triangles`,
-      `toggle-theme`, `new-tab`, `export`) have no key and therefore no row in
-      the help table — the table only renders `FIXED_KEYS` + `COMMANDS`. Give them
-      entries, or render the keyless actions too so Coord/Paste ◀ stop being
-      invisible to keyboard users.
-- [ ] **Settings inputs validate looser than they advertise**: the markup carries
-      `min`/`max` (font size 8–40, spacing bounds), the handlers accept any
-      `> 0` / `>= 0`, so a typed-in 400 goes straight into the layout.
+      `toggle-theme`, `new-tab`, `export`, `share`) have no key and therefore no
+      row in the help table — the table only renders `FIXED_KEYS` + `COMMANDS`.
+      Give them entries, or render the keyless actions too so Coord/Paste ◀ stop
+      being invisible to keyboard users.
